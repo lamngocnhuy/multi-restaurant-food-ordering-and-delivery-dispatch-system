@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8f3">
+  <meta name="description" content="Discover your neighborhood favorites and order from multiple restaurants in one delicious delivery.">
+  <title>Gather — Something good is on the way</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=Manrope:wght@400;500;600;650;700;750;800&display=swap" rel="stylesheet">
+  <link href="/static/vendor/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/vendor/leaflet.css" rel="stylesheet">
+  <link href="/static/style.css" rel="stylesheet">
+  <script defer src="/static/vendor/leaflet.js"></script>
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" aria-label="Main navigation">
+    <a class="brand" href="#explore" aria-label="Gather home"><span class="brand-mark">g<span>•</span></span>gather<span class="brand-dot">.</span></a>
+    <div class="nav-overline">YOUR DAILY GOOD</div>
+    <nav id="main-nav">
+      <a class="nav-link active" href="#explore" data-nav="explore"><span data-icon="compass"></span>Explore<span class="nav-dot"></span></a>
+      <a class="nav-link" href="#orders" data-nav="orders"><span data-icon="bag"></span>My orders</a>
+      <a class="nav-link" href="#reviews" data-nav="reviews"><span data-icon="star"></span>My reviews</a>
+      <div id="role-nav"></div>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="together-card"><div class="mini-illustration"><span data-icon="utensils"></span><span class="little-star">✳</span></div><strong>A little of everything.</strong><p>Different cravings?<br>One happy delivery.</p><button class="text-link" data-action="how-it-works">Meet multi-restaurant orders <span>↗</span></button></div>
+      <button class="nav-link support-link" data-action="help"><span data-icon="help"></span>Need a hand?</button>
+      <div class="sidebar-caption">Made for good food & good days.<br>Ho Chi Minh City, Vietnam <span>✳</span></div>
+    </div>
+  </aside>
+  <div class="page-shell">
+    <header class="topbar">
+      <button class="icon-button mobile-menu" data-action="mobile-nav" aria-label="Open navigation"><span data-icon="menu"></span></button>
+      <button class="location-button" data-action="address"><span class="location-icon" data-icon="pin"></span><span><small>DELIVER TO</small><strong id="delivery-label">Ton Duc Thang University</strong></span><span data-icon="chevron-down"></span></button>
+      <label class="search-box"><span data-icon="search"></span><input id="global-search" type="search" placeholder="What are you craving?" aria-label="Search restaurants and food"><kbd>⌘ K</kbd></label>
+      <div class="header-actions"><button class="icon-button" data-action="orders" aria-label="View your orders"><span data-icon="bell"></span></button><button id="account-button" class="account-button" data-action="account"><span class="avatar">G</span><span id="account-label">Sign in</span><span data-icon="chevron-down"></span></button><button class="mobile-cart icon-button" data-action="cart" aria-label="Open basket"><span data-icon="bag"></span><b id="mobile-cart-count">0</b></button></div>
+    </header>
+    <div class="content-grid">
+      <main id="main-content" tabindex="-1" aria-live="polite"><div class="initial-loading"><span class="spinner-border spinner-border-sm"></span> Finding your next favorite…</div></main>
+      <aside class="basket-panel" id="basket-panel" aria-label="Your basket"><div id="basket-content"></div></aside>
+    </div>
+    <footer class="mobile-footer"><a href="#explore" data-icon="compass" aria-label="Explore"></a><a href="#orders" data-icon="bag" aria-label="My orders"></a><button data-action="account" data-icon="user" aria-label="Account"></button><button data-action="cart" data-icon="cart" aria-label="Basket"></button></footer>
+  </div>
+</div>
+<div class="modal-backdrop-custom" id="modal-backdrop" hidden></div>
+<div class="modal-custom" id="app-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden><button class="modal-close icon-button" data-action="close-modal" aria-label="Close dialog"><span data-icon="x"></span></button><div id="modal-content"></div></div>
+<div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>
