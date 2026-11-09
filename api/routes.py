@@ -108,20 +108,20 @@ def public_config(db:Session=Depends(get_db)):
     c=config(db)
     return {'currency':'VND','city':'Ho Chi Minh City','default_location':{'lat':10.7769,'lng':106.7009},'max_group_distance_km':c.max_group_distance_km,'base_delivery_fee':c.base_delivery_fee,'per_km_fee':c.per_km_fee,'payment_provider':PAYMENT_PROVIDER,'sandbox_payment':PAYMENT_PROVIDER=='sandbox','promos':[{'code':'WELCOME10','description':'10% off food, up to 50,000₫'},{'code':'FREESHIP','description':'Up to 30,000₫ off delivery'}]}
 
-@router.get('/restaurants')
+@router.get('/restaurants', dependencies=[Depends(customer)])
 def restaurants(q:str='',category:str='',db:Session=Depends(get_db)):
     stmt=select(Restaurant)
     if q:stmt=stmt.where(Restaurant.name.ilike(f'%{q[:100]}%')|Restaurant.description.ilike(f'%{q[:100]}%'))
     if category and category.lower() not in {'all','all cuisines'}:stmt=stmt.where(Restaurant.category.ilike(category[:80]))
     return {'restaurants':[restaurant_json(db,r) for r in db.scalars(stmt.order_by(Restaurant.featured.desc(),Restaurant.name))]}
 
-@router.get('/restaurants/{rid}')
+@router.get('/restaurants/{rid}', dependencies=[Depends(customer)])
 def restaurant_detail(rid:str,db:Session=Depends(get_db)):
     r=db.get(Restaurant,rid)
     if not r:fail('Restaurant was not found.',404)
     return {'restaurant':restaurant_json(db,r),'menu':[menu_json(m) for m in db.scalars(select(MenuItem).where(MenuItem.restaurant_id==rid).order_by(MenuItem.popular.desc(),MenuItem.category,MenuItem.name))]}
 
-@router.get('/menu')
+@router.get('/menu', dependencies=[Depends(customer)])
 def menu(q:str='',category:str='',restaurant_id:str='',db:Session=Depends(get_db)):
     stmt=select(MenuItem).options(selectinload(MenuItem.restaurant))
     if q:stmt=stmt.where(MenuItem.name.ilike(f'%{q[:100]}%')|MenuItem.description.ilike(f'%{q[:100]}%'))
@@ -129,7 +129,7 @@ def menu(q:str='',category:str='',restaurant_id:str='',db:Session=Depends(get_db
     if restaurant_id:stmt=stmt.where(MenuItem.restaurant_id==restaurant_id)
     return {'items':[menu_json(m) for m in db.scalars(stmt.order_by(MenuItem.popular.desc(),MenuItem.name))]}
 
-@router.get('/menu/{mid}')
+@router.get('/menu/{mid}', dependencies=[Depends(customer)])
 def menu_detail(mid:str,db:Session=Depends(get_db)):
     m=db.get(MenuItem,mid)
     if not m:fail('Dish was not found.',404)

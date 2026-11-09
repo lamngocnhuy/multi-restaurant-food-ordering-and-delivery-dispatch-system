@@ -49,18 +49,26 @@ With `SEED_DEMO=true`, the seeded password is **`Demo123!`**. Set `DEMO_PASSWORD
 
 | Role | Email | Workspace |
 | --- | --- | --- |
-| Customer | `customer@localtable.vn` | Discovery, cart, checkout, tracking |
+| Customer | `customer@localtable.vn` | `/order` — restaurants, basket, checkout, tracking |
 | Restaurant | `restaurant@localtable.vn` | `/restaurant` — menu and preparation |
 | Driver | `driver@localtable.vn` | `/driver` — offers, pickups, delivery |
 | Administrator | `admin@localtable.vn` | `/admin` — users, dispatch, reports, settlements |
 
-These fictional login emails are stable demonstration identifiers. No email is sent. Public registration creates customers only. Session authentication also checks the user's role, active status, and resource ownership.
+All four roles sign in on the same page (`/` or `/sign-in`). The account determines where you land: customers go to **Order food** (`/order`), and staff go to their own workspace. Signed-out visitors do not see orders, reviews, delivery details, or the basket. Public registration creates customers only.
 
 Other seeded restaurant owners are `restaurant2@localtable.vn` through `restaurant8@localtable.vn` (Pizza & Co., The Green Bowl, Seoul Table, Burger Theory, Mori Sushi, Cloud Nine Tea, Butter & Crumb). A second driver is `driver2@localtable.vn`; all use the same configured demonstration password.
 
+## Delivery address lookup
+
+Customers start without a delivery address. Their confirmed address is saved per account in the current browser. Signed-out visitors see sign-in and registration, and staff go directly to their workspaces.
+
+To fill the street address from **Use my current location**, enable the [Google Geocoding API](https://developers.google.com/maps/documentation/geocoding/cloud-setup) with billing in your Google Cloud project. Add your restricted server key as `GOOGLE_MAPS_API_KEY` in the local `.env`, then restart Gather (`docker compose up -d --force-recreate --no-deps app` for Docker). Keep the key on the server.
+
+Allow browser location access on localhost or HTTPS. Gather sends the device coordinates to Google Maps for the lookup, then lets you review the street address and add unit details before saving. Without the key or a matching result, use the captured coordinates and enter the street address manually. You can also enter both the address and coordinates by hand.
+
 ## Complete order walkthrough
 
-1. Sign in as customer, search/filter restaurants, open dishes, confirm customizations, and add dishes from two nearby restaurants. The cart groups them by restaurant.
+1. Sign in as a customer. On **Order food**, search or filter restaurants, open a menu, customize a dish, and add it to your basket. Add dishes from two nearby restaurants to see how the basket groups them.
 2. Review quantities, fees and totals. Enter a delivery address and coordinates near central Ho Chi Minh City (the seed locations are around District 1). Try `WELCOME10` or `FREESHIP`. Server quoting and checkout revalidate prices, availability, acceptance, distance and totals.
 3. Choose COD or online. Online checkout opens a clearly labelled **sandbox** page to simulate success or failure. Failed payment can be retried; idempotency keys prevent duplicate orders.
 4. In independent browser profiles, sign into the restaurant workspaces. Accept, prepare and mark each portion ready using its owning account. Separate profiles keep roles signed in independently.
@@ -81,7 +89,7 @@ One restaurant's rejection removes/refunds only that portion; remaining portions
 
 ```sh
 pytest -q
-python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 200 --requests 2000 --output artifacts/load-test.json
+python scripts/load_test.py --demo --base-url http://127.0.0.1:8000 --users 200 --requests 2000 --output artifacts/load-test-authenticated.json
 ```
 
 `pytest -q` uses a disposable SQLite database and skips PostgreSQL concurrency checks. For PostgreSQL acceptance, create a separate database whose name ends in `_test` and run, adjusting the connection details:
@@ -92,7 +100,7 @@ TEST_DATABASE_URL='postgresql+psycopg://gather:your-local-password@localhost:543
 
 The suite creates/drops its test schema. Its guard rejects a PostgreSQL database name without the `_test` suffix. Never point it at an application database. Recorded validation and measured catalog latency are in [verification](docs/verification.md).
 
-The read-only load test exercises restaurant discovery, menu search and a restaurant menu with up to 200 concurrent clients. It reports failures and per-endpoint p95, failing if any exceeds 2 seconds. Retain JSON with server specifications. A laptop result does not establish production capacity or uptime.
+The load test signs in once as a customer, then exercises restaurant discovery, menu listing and a restaurant menu with up to 200 concurrent clients sharing that session. Login and warm-up are excluded from timing. `--demo` uses the seeded customer and default demo password. For a dedicated customer, pass `--email` or set `GATHER_LOAD_TEST_EMAIL`; the script prompts for the password. Set `GATHER_LOAD_TEST_PASSWORD` for non-interactive runs or if the demo account uses a customized password. Use HTTPS when testing a non-local server. The test reports failures and per-endpoint p95, failing if any exceeds 2 seconds. Retain the JSON with server specifications.
 
 ## Operations
 

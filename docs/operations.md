@@ -68,9 +68,11 @@ Restaurant settlement equals eligible food revenue less commission. Driver settl
 Monitor `/health` from outside the host, container restarts, PostgreSQL storage/connections, error and forbidden-access logs, pending dispatch, failed payments, stale GPS, overdue settlement work, archive age and certificate expiry. Do not log passwords, cookies or secrets.
 
 ```sh
-python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 200 --requests 2000 --output artifacts/load-test.json
+python scripts/load_test.py --demo --base-url http://127.0.0.1:8000 --users 200 --requests 2000 --output artifacts/load-test-authenticated.json
 ```
 
-The read-only test warms catalog endpoints, then measures requests including client connection waits and failures. It records concurrency, throughput and p50/p95/max for every endpoint. Exit 0 requires no errors and each p95≤2s; 1 signals a threshold failure; 2 indicates a setup failure. Retain server specs, data size/topology and load with its JSON. Remote generation better isolates server capacity.
+Use `--demo` only with seeded development data. For staging, provision an active customer and pass `--email` or set `GATHER_LOAD_TEST_EMAIL`. The script prompts for a password without echo; non-interactive runs should supply `GATHER_LOAD_TEST_PASSWORD` from the job's secret store. This variable also overrides the default demo password when `--demo` is used. Non-local origins require HTTPS.
+
+The test authenticates once and shares the customer session among all concurrent clients; neither login nor warm-up counts toward latency. Timed requests only read the catalog and include connection waits and failures. The JSON records concurrency, throughput and p50/p95/max for each endpoint without credentials or cookies. Exit 0 requires no errors and each p95≤2s; 1 signals a threshold failure; 2 indicates a setup failure. Retain server specs, data size/topology and load with its JSON. Remote generation better isolates server capacity.
 
 Single-host Compose restart policies cannot prove **99.5% monthly uptime** (roughly 3h36m downtime in a 30-day month, excluding announced maintenance). Meeting it needs measured external uptime, redundant apps, database failover, reviewed migrations and incident response. Tables are initially created at startup; production schema evolution requires versioned reviewed migrations, not a database reset.

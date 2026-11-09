@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Read-only catalog load test for report NFR01. Requires httpx."""
+"""Authenticated customer catalog load test for report NFR01. Requires httpx."""
 
 import argparse
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timezone
+import getpass
+import ipaddress
 import json
 import math
+import os
 from pathlib import Path
 import sys
 from time import perf_counter
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -18,19 +22,52 @@ def percentile(values: list[float], fraction: float) -> float:
     return sorted(values)[max(0, math.ceil(len(values) * fraction) - 1)]
 
 
-async def run(args: argparse.Namespace) -> dict:
+def validate_base_url(value: str) -> None:
+    url = urlsplit(value)
+    if (url.scheme not in {"http", "https"} or not url.hostname or url.username is not None
+            or url.path not in {"", "/"} or url.query or url.fragment):
+        raise ValueError("--base-url must be an HTTP(S) origin without credentials, path, or query.")
+    if url.scheme == "http":
+        try:
+            loopback = ipaddress.ip_address(url.hostname).is_loopback
+        except ValueError:
+            loopback = url.hostname == "localhost"
+        if not loopback:
+            raise ValueError("Use HTTPS for non-local servers so the benchmark password is encrypted.")
+
+
+async def sign_in(client: httpx.AsyncClient, email: str, password: str) -> None:
+    response = await client.post("/api/auth/login", json={"email": email, "password": password})
+    if response.status_code in {401, 403}:
+        raise ValueError("Sign-in failed. Check that the benchmark customer account is active and its password is correct.")
+    if response.status_code == 429:
+        raise ValueError("Sign-in is rate limited. Wait five minutes before trying again.")
+    response.raise_for_status()
+    payload = response.json()
+    user = payload.get("user") if isinstance(payload, dict) else None
+    if not isinstance(user, dict) or user.get("role") != "customer":
+        raise ValueError("Use a customer account. Staff accounts cannot browse the catalog.")
+    if not client.cookies.get("gather_session"):
+        raise ValueError("The server did not set a customer session cookie.")
+
+
+async def run(args: argparse.Namespace, email: str, password: str) -> dict:
     limits = httpx.Limits(max_connections=args.users, max_keepalive_connections=args.users)
     endpoints = ["/api/restaurants", "/api/menu"]
     records: list[tuple[str, float, bool, str]] = []
     active = peak = 0
     async with httpx.AsyncClient(base_url=args.base_url.rstrip("/"), timeout=args.timeout,
                                  limits=limits, follow_redirects=False) as client:
-        # Warm-up is excluded from the reported distribution.
+        # Log in once and share the cookie. Neither login nor warm-up is timed.
+        await sign_in(client, email, password)
         response = await client.get("/api/restaurants")
+        if response.status_code in {401, 403}:
+            raise ValueError("Catalog access was denied after sign-in. Check the customer session and use HTTPS if secure cookies are enabled.")
         response.raise_for_status()
         restaurants = response.json().get("restaurants", [])
-        if restaurants:
-            endpoints.append(f"/api/restaurants/{restaurants[0]['id']}")
+        if not restaurants:
+            raise ValueError("Add at least one restaurant before benchmarking catalog and menu detail.")
+        endpoints.append(f"/api/restaurants/{restaurants[0]['id']}")
         for endpoint in endpoints:
             (await client.get(endpoint)).raise_for_status()
 
@@ -80,6 +117,8 @@ async def run(args: argparse.Namespace) -> dict:
     return {
         "tested_at": datetime.now(timezone.utc).isoformat(),
         "base_url": args.base_url,
+        "authenticated_role": "customer",
+        "session_count": 1,
         "concurrent_users": args.users,
         "peak_requests_in_flight": peak,
         "duration_seconds": round(duration, 2),
@@ -96,6 +135,9 @@ async def run(args: argparse.Namespace) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
+    account = parser.add_mutually_exclusive_group()
+    account.add_argument("--demo", action="store_true", help="Use the seeded development customer.")
+    account.add_argument("--email", help="Customer email; defaults to GATHER_LOAD_TEST_EMAIL.")
     parser.add_argument("--users", type=int, default=200)
     parser.add_argument("--requests", type=int, default=2000)
     parser.add_argument("--timeout", type=float, default=10)
@@ -108,8 +150,19 @@ def main() -> int:
     if args.requests < args.users or args.timeout <= 0 or args.target <= 0:
         parser.error("Requests must cover all users; timeout and target must be positive.")
     try:
-        result = asyncio.run(run(args))
-    except (httpx.HTTPError, ValueError) as exc:
+        validate_base_url(args.base_url)
+        email = "customer@localtable.vn" if args.demo else args.email or os.getenv("GATHER_LOAD_TEST_EMAIL")
+        if not email:
+            parser.error("Choose --demo for the seeded account, or supply --email / GATHER_LOAD_TEST_EMAIL.")
+        password = os.getenv("GATHER_LOAD_TEST_PASSWORD")
+        if not password and args.demo:
+            password = "Demo123!"
+        if not password:
+            if not sys.stdin.isatty():
+                parser.error("Set GATHER_LOAD_TEST_PASSWORD for non-interactive runs.")
+            password = getpass.getpass("Customer password: ")
+        result = asyncio.run(run(args, email, password))
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         print(f"Cannot prepare catalog load test: {exc}", file=sys.stderr)
         return 2
     rendered = json.dumps(result, indent=2)

@@ -4,10 +4,10 @@ Recorded on **3 November 2026** during implementation. The normal application us
 
 ## Catalog load test — NFR01
 
-The read-only load test completed at **16:19:26 Asia/Ho_Chi_Minh** (`2026-11-03T09:19:26Z`) against the locally running application and real PostgreSQL database. The raw output is `artifacts/load-test.json` in this workspace.
+The baseline load test completed at **16:19:26 Asia/Ho_Chi_Minh** (`2026-11-03T09:19:26Z`) against the locally running application and real PostgreSQL database, before catalog access required a customer session. The raw baseline output is `artifacts/load-test.json` in this workspace. To measure the current authenticated flow, sign in with a seeded demo customer or use a dedicated benchmark customer as described in [Operations](operations.md#monitoring-and-capacity):
 
 ```sh
-python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 200 --requests 2000 --output artifacts/load-test.json
+python scripts/load_test.py --demo --base-url http://127.0.0.1:8000 --users 200 --requests 2000 --output artifacts/load-test-authenticated.json
 ```
 
 | Measure | Recorded value |
@@ -28,7 +28,7 @@ python scripts/load_test.py --base-url http://127.0.0.1:8000 --users 200 --reque
 | Menu search | 667 | 808.14 ms | 98.80% |
 | Restaurant menu/detail | 666 | 802.98 ms | 99.25% |
 
-The report requires at least 95% of catalog/menu lookups within 2 seconds under up to 200 concurrent users; this measured run met that criterion. Some individual requests exceeded 2 seconds, as shown by the maximum. Client and server ran locally with seeded catalog data; a deployment with larger data, public traffic, remote networking or different hardware must repeat the test.
+The report requires at least 95% of catalog/menu lookups within 2 seconds under up to 200 concurrent users; this baseline met that criterion. Some individual requests exceeded 2 seconds, as shown by the maximum. Client and server ran locally with seeded data. Repeat the test for evidence of authenticated catalog latency on the current implementation and on the intended deployment.
 
 ## Automated acceptance results
 

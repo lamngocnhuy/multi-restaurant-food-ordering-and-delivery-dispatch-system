@@ -58,6 +58,7 @@ def finish(api, db, order, cod=True):
     return ok(api.post(f"/api/driver/trips/{order['trip']['id']}/complete",json={'cod_received':cod}))['order']
 
 def test_catalog_details_and_search(api,db):
+    login(api)
     catalog=ok(api.get('/api/restaurants'))['restaurants']
     assert len(catalog)>=4
     data=ok(api.get('/api/restaurants/'+catalog[0]['id']))
@@ -65,6 +66,22 @@ def test_catalog_details_and_search(api,db):
     name=data['menu'][0]['name']
     found=ok(api.get('/api/menu',params={'q':name}))['items']
     assert any(item['name']==name for item in found)
+    dish=ok(api.get('/api/menu/'+data['menu'][0]['id']))['item']
+    assert dish['name']==name
+
+def test_catalog_rejects_guests_and_staff(api,db):
+    dish=dishes(db,1)[0]
+    paths=['/api/restaurants', f'/api/restaurants/{dish.restaurant_id}',
+           '/api/menu', f'/api/menu/{dish.id}']
+    for path in paths:
+        assert api.get(path).status_code==401
+    for role in ('restaurant','driver','admin'):
+        login(api,role)
+        for path in paths:
+            assert api.get(path).status_code==403
+        dashboard=ok(api.get(f'/api/{role}/dashboard'))
+        if role=='restaurant':
+            assert dashboard['menu']
 
 def test_authentication_role_scoping_and_registration(api):
     assert api.get('/api/admin/dashboard').status_code==401

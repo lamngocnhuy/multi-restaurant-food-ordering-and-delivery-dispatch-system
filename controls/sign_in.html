@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8f3">
+  <meta name="description" content="Sign in to Gather to order food or access your restaurant, driver, or operations workspace.">
+  <title>Sign in to Gather</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=Manrope:wght@400;500;600;650;700;750;800&display=swap" rel="stylesheet">
+  <link href="/static/vendor/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/style.css?v={{ asset_version }}" rel="stylesheet">
+  <script defer src="/static/auth.js?v={{ asset_version }}"></script>
+</head>
+<body class="auth-page">
+<header class="auth-site-header">
+  <a class="brand" href="/sign-in" aria-label="Gather sign-in"><span class="brand-mark">g<span>•</span></span>gather<span class="brand-dot">.</span></a>
+  <span class="auth-site-city">HO CHI MINH CITY, VIETNAM</span>
+</header>
+<main class="auth-stage" aria-labelledby="auth-title">
+  <section class="auth-intro" aria-label="About Gather">
+    <div class="section-eyebrow">A LITTLE LOCAL. A LOT TO LOVE.</div>
+    <p class="auth-intro-title">Good food.<br><em>Great company.</em></p>
+    <p class="auth-intro-copy">Your neighborhood favorites, brought together in one delivery.</p>
+    <img src="https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=900&amp;auto=format&amp;fit=crop&amp;q=85" alt="A colorful bowl of vegetables and greens" width="900" height="600" fetchpriority="low">
+  </section>
+  <section class="auth-panel">
+    <div class="section-eyebrow">WELCOME TO GATHER</div>
+    <h1 id="auth-title">Sign in to Gather</h1>
+    <p id="auth-description" class="auth-description">One sign-in for customers, restaurant teams, drivers, and administrators.</p>
+    <div class="auth-tabs" aria-label="Account access">
+      <button type="button" id="auth-login-tab" class="active" data-auth-mode="login" aria-pressed="true">Sign in</button>
+      <button type="button" id="auth-register-tab" data-auth-mode="register" aria-pressed="false">Create customer account</button>
+    </div>
+    <form id="auth-form" method="post" action="/api/auth/login" aria-describedby="auth-description">
+      <div class="form-field" id="auth-name-field" hidden>
+        <label class="field-label" for="auth-name">Your name</label>
+        <input class="form-control" id="auth-name" name="name" autocomplete="name" minlength="2" maxlength="120" disabled>
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="auth-email">Email address</label>
+        <input class="form-control" id="auth-email" name="email" type="email" autocomplete="username" maxlength="254" required placeholder="you@example.com">
+      </div>
+      <div class="form-field" id="auth-phone-field" hidden>
+        <label class="field-label" for="auth-phone">Phone number <span class="muted">(optional)</span></label>
+        <input class="form-control" id="auth-phone" name="phone" type="tel" autocomplete="tel" maxlength="30" disabled>
+      </div>
+      <div class="form-field">
+        <label class="field-label" for="auth-password">Password</label>
+        <input class="form-control" id="auth-password" name="password" type="password" autocomplete="current-password" maxlength="128" required placeholder="Your password">
+      </div>
+      <p id="auth-feedback" class="form-error" role="alert" hidden></p>
+      <button class="primary-button auth-submit" type="submit"><span id="auth-submit-label">Sign in</span><span aria-hidden="true">→</span></button>
+    </form>
+    {% if demo_mode %}
+    <section class="demo-accounts auth-demo" aria-labelledby="auth-demo-heading">
+      <h2 id="auth-demo-heading">Try a demo account</h2>
+      <p>Choose a role to fill its demo details, then select Sign in.</p>
+      <div class="demo-account-grid">
+        <button type="button" data-demo-role="customer"><strong>Customer</strong><span>Order food</span></button>
+        <button type="button" data-demo-role="restaurant"><strong>Restaurant</strong><span>Manage a menu</span></button>
+        <button type="button" data-demo-role="driver"><strong>Driver</strong><span>Manage deliveries</span></button>
+        <button type="button" data-demo-role="admin"><strong>Administrator</strong><span>Manage operations</span></button>
+      </div>
+    </section>
+    {% endif %}
+    <noscript><p class="form-error">Enable JavaScript in your browser to sign in or create an account.</p></noscript>
+  </section>
+</main>
+</body>
+</html>

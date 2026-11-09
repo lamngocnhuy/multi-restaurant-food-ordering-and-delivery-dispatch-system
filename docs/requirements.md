@@ -30,7 +30,7 @@ Dispatch uses geographic pickup distance, not live road/traffic routing. GPS/map
 
 | ID | Implementation and verification | Operational qualification |
 | --- | --- | --- |
-| NFR01 | `scripts/load_test.py --users 200 --requests 2000`: catalog/menu p95≤2s, failures and JSON evidence | Run on intended hardware with representative data; code alone is not performance evidence |
+| NFR01 | `scripts/load_test.py --demo --users 200 --requests 2000`: signs in as a seeded customer, measures catalog/menu p95≤2s and failures, writes JSON evidence | Use a dedicated customer and representative data on intended hardware; code alone is not performance evidence |
 | NFR02 | Driver location cadence 10s; tracking polls within 20s; persisted timestamps/stale feedback | Stable network and active permissioned browser required; background suspension prevents a hard mobile guarantee |
 | NFR03 | TLS proxy config, production secure-cookie guard, hashed passwords, signed callbacks; no card/CVV fields | Enable HTTPS for public traffic; local HTTP is development; payments are sandbox |
 | NFR04 | Session/role/ownership checks and forbidden-access audit logs | Retain logs; verify customer/driver report/admin/settlement requests return 403 |
@@ -59,7 +59,7 @@ Numeric distance/fee/commission/promotion values are configurable implementation
 
 | Use case | Application behavior |
 | --- | --- |
-| UC01 | Login dialog, customer registration, four roles |
+| UC01 | Shared sign-in page for four roles, customer registration, and role-specific entry after authentication |
 | UC02 | `/restaurant` menu and sold-out/acceptance controls |
 | UC03 | Persistent cart drawer with quantity/options/removal |
 | UC04 | Checkout, distance/availability rejection, failed payment/retry, partial rejection |

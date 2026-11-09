@@ -1,22 +1,25 @@
 """Gather — multi-restaurant ordering and delivery dispatch."""
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 from urllib.parse import urlparse
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from database.connection import Base, engine, SessionLocal
+from database.connection import Base, engine, get_db, SessionLocal
+from models.entities import User
 from properties.config import ROOT, SEED_DEMO, ENABLE_SCHEDULER, TRUSTED_HOSTS, APP_ENV
 from api.routes import router
+from api.geocoding import router as geocoding_router
 from services.seed import seed
 from services.reconciliation import reconcile
 from services.commerce import retry_waiting_dispatch
+from utilities.security import read_token
 
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
 log=logging.getLogger('gather')
@@ -82,22 +85,63 @@ async def integrity_error(request,exc):
     return JSONResponse({'detail':'This action conflicts with an existing record or another update. Refresh and try again.'},status_code=409)
 
 app.include_router(router)
+app.include_router(geocoding_router)
 app.mount('/static',StaticFiles(directory=str(ROOT/'asset')),name='static')
 app.mount('/asset',StaticFiles(directory=str(ROOT/'asset')),name='asset')
 templates=Jinja2Templates(directory=str(ROOT/'controls'))
+ROLE_HOME = {'customer': '/order', 'restaurant': '/restaurant', 'driver': '/driver', 'admin': '/admin'}
+CUSTOMER_PAGES = {'order', 'explore', 'restaurants', 'orders', 'reviews', 'payment'}
+NO_STORE = {'Cache-Control': 'no-store'}
+
+
+def page_user(request: Request, db=Depends(get_db)):
+    """Resolve the session before choosing which HTML to send."""
+    user_id = read_token(request.cookies.get('gather_session', ''))
+    user = db.get(User, user_id) if user_id else None
+    return user if user and user.active and user.role in ROLE_HOME else None
+
+
+def web_page(request: Request, template: str):
+    # Give related HTML, scripts and styles one revision so an older cached app
+    # script cannot boot against the new markup and authorization rules.
+    version = hashlib.blake2b(digest_size=8)
+    for name in ('app.js', 'auth.js', 'style.css'):
+        version.update((ROOT / 'asset' / name).read_bytes())
+    return templates.TemplateResponse(request=request, name=template, headers=NO_STORE, context={
+        'asset_version': version.hexdigest(),
+        'demo_mode': SEED_DEMO and APP_ENV != 'production',
+    })
 
 @app.get('/health')
 def health():
     with SessionLocal() as db:db.execute(text('SELECT 1'))
     return {'status':'ok','service':'Gather','database':'connected'}
 
+@app.get('/sign-in', include_in_schema=False)
+def sign_in(request: Request, user=Depends(page_user)):
+    if user:
+        return RedirectResponse(ROLE_HOME[user.role], status_code=303, headers=NO_STORE)
+    return web_page(request, 'sign_in.html')
+
+
 @app.get('/',include_in_schema=False)
+@app.get('/order', include_in_schema=False)
+@app.get('/explore', include_in_schema=False)
 @app.get('/restaurants/{path:path}',include_in_schema=False)
 @app.get('/orders',include_in_schema=False)
 @app.get('/orders/{path:path}',include_in_schema=False)
+@app.get('/reviews', include_in_schema=False)
 @app.get('/restaurant',include_in_schema=False)
 @app.get('/driver',include_in_schema=False)
 @app.get('/admin',include_in_schema=False)
 @app.get('/payment/{path:path}',include_in_schema=False)
-def shell(request:Request,path:str=''):
-    return templates.TemplateResponse(request=request,name='index.html',context={})
+def shell(request: Request, user=Depends(page_user)):
+    if not user:
+        return web_page(request, 'sign_in.html')
+
+    section = request.url.path.strip('/').split('/', 1)[0]
+    if (section in CUSTOMER_PAGES and user.role != 'customer') or (
+        section in {'restaurant', 'driver', 'admin'} and section != user.role
+    ):
+        return RedirectResponse(ROLE_HOME[user.role], status_code=303, headers=NO_STORE)
+    return web_page(request, 'index.html')

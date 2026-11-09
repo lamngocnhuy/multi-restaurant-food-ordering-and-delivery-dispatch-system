@@ -2,14 +2,21 @@
 
 All API routes use JSON, same origin, session cookie. Errors are `{detail:"Actionable message"}` (validation can be array). IDs are strings. Money is integer VND. All dates ISO UTC. Register creates customers only. Demo accounts: `customer@localtable.vn`, `restaurant@localtable.vn`, `driver@localtable.vn`, `admin@localtable.vn`; password `Demo123!` (override via DEMO_PASSWORD). Restaurant account owns restaurant `r-saigon`.
 
-## Session and catalog
+## Session
 - GET `/api/auth/me`: `{user:null|{id,name,email,role,phone,restaurant_id}, demo_mode:boolean}`.
 - POST `/api/auth/login` `{email,password}` -> `{user}`. POST `/api/auth/register` `{name,email,password,phone?}` -> `{user}`. POST `/api/auth/logout`.
+
+## Catalog (customer)
+
+All catalog list, search, and detail routes require an active customer session. Guests receive `401` and staff receive `403`. Restaurant accounts manage their own menus through the restaurant workspace API.
+
 - GET `/api/restaurants?q=&category=` -> `{restaurants:[{id,name,description,category,image,address,lat,lng,rating,review_count,delivery_minutes,accepting_orders,delivery_fee,featured,tags}]}`.
 - GET `/api/restaurants/{id}` -> `{restaurant:... ,menu:[{id,restaurant_id,code,name,description,category,price,image,available,popular,options:{sizes:[{name,price}],sugar:[string],ice:[string],toppings:[{name,price}]}}]}`.
 - GET `/api/menu?q=&category=&restaurant_id=` -> `{items:[dish with restaurant_name]}`. GET `/api/menu/{id}` -> `{item}`.
 
 ## Cart and checkout (customer)
+
+- `POST /api/delivery/reverse-geocode` with `{"lat":10.7769,"lng":106.7009}` → `{"address":"…","source":"google_maps"}`. Uses the server's optional `GOOGLE_MAPS_API_KEY`. Returns `404` for no street-level match, `429` for requests in quick succession, or `503` when unavailable; the customer can enter the address manually.
 - GET `/api/cart` -> `{items:[{id,menu_item_id,restaurant_id,restaurant_name,name,image,quantity,options:{size,sugar,ice,toppings:[]},note,base_price,extra_price,unit_price,line_total,available}],groups:[{restaurant_id,restaurant_name,items,subtotal}],subtotal,item_count}`.
 - POST `/api/cart/items` `{menu_item_id,quantity:1,options:{size?,sugar?,ice?,toppings:[]},note:""}` -> full cart.
 - PATCH `/api/cart/items/{id}` `{quantity?,options?,note?}` -> cart. DELETE same -> cart. DELETE `/api/cart` -> cart.
@@ -39,7 +46,7 @@ All API routes use JSON, same origin, session cookie. Errors are `{detail:"Actio
 - POST `/api/admin/orders/{id}/dispatch` -> `{order}`. POST `/api/admin/orders/{id}/resolve` `{action:"cancel"|"retry_dispatch",reason}`.
 - GET `/api/admin/settlements` -> `{settlements}`. POST `/api/admin/settlements/run` `{}` reconciles due Sunday23:59 Asia/Ho_Chi_Minh periods idempotently (manual processing also available for completed current period with `{include_current:true}`). POST `/api/admin/settlements/{id}/paid` -> `{settlement}`. Settlement fields id,period_start,period_end,party_type,party_id,party_name,gross_amount,commission,cod_collected,amount,status,created_at.
 
-HTML routes `/`, `/restaurants/{id}`, `/orders`, `/orders/{id}`, `/restaurant`, `/driver`, `/admin`, `/payment/{id}` all render controls/index.html and frontend selects view from location.pathname. Docs at `/docs`; health `/health`. Bootstrap can call auth/me + catalog in parallel. Images use remote Unsplash URLs. Config public info GET `/api/config`.
+The HTML entry at `/` or `/sign-in` shows a standalone sign-in form when signed out. After customer sign-in, `/order` opens ordering (`/#explore` still works). Customer pages include `/restaurants/{id}`, `/orders`, `/orders/{id}`, and `/payment/{id}`. The staff workspaces are `/restaurant`, `/driver`, and `/admin`. A signed-out request to any app page receives the sign-in form; a signed-in request to another role's page redirects to the account's own home. Docs at `/docs`; health `/health`. Call `/api/auth/me` before loading the catalog and request it only for a customer session. Config public info: GET `/api/config`.
 
 Admin account provisioning: POST `/api/admin/users` with `{name,email,password,phone?,role:"customer"|"restaurant"|"driver"|"admin",restaurant?:{name,description?,category,address,lat,lng,image?}}` -> `{user}` (201). Restaurant details required only for restaurant role; newly provisioned restaurants start closed until their menu is ready. Other create endpoints also use 201. Demo second driver `driver2@localtable.vn` / `Demo123!` allows decline-and-reassign. Unreviewed restaurants return `rating:null,review_count:0` (show “New”). Production initial admin: `python scripts/create_user.py --email ... --name ... --role admin` prompts for a password. Signed callback `/api/payments/callback` exact JSON `{payment_id,outcome,external_reference}` plus `X-Payment-Signature` HMAC-SHA256 hex over the exact request body, using PAYMENT_WEBHOOK_SECRET. This is a provider integration boundary, not a live processor integration.
 
