@@ -1,0 +1,15 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+backups
+artifacts
+test-results
+node_modules
+.DS_Store
+*.pdf
