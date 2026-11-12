@@ -13,7 +13,6 @@ COOKIE_SECURE = os.getenv('SECURE_COOKIES', os.getenv('COOKIE_SECURE', 'false'))
 SEED_DEMO = os.getenv('SEED_DEMO', 'true').lower() == 'true'
 ENABLE_SCHEDULER = os.getenv('ENABLE_SCHEDULER', 'true').lower() == 'true'
 PAYMENT_PROVIDER = os.getenv('PAYMENT_PROVIDER', 'sandbox')
-GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY', '').strip()
 DEMO_PASSWORD = os.getenv('DEMO_PASSWORD', 'Demo123!')
 BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000').rstrip('/')
 TRUSTED_HOSTS = [s.strip() for s in os.getenv('TRUSTED_HOSTS', 'localhost,127.0.0.1,testserver').split(',') if s.strip()]

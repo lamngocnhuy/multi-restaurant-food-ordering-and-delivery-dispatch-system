@@ -48,7 +48,12 @@
       </div>
       <div class="form-field">
         <label class="field-label" for="auth-password">Password</label>
-        <input class="form-control" id="auth-password" name="password" type="password" autocomplete="current-password" maxlength="128" required placeholder="Your password">
+        <div class="password-field">
+          <input class="form-control" id="auth-password" name="password" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="none" maxlength="128" required placeholder="Your password">
+          <button class="password-toggle" type="button" aria-controls="auth-password" aria-label="Show password" title="Show password">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path class="password-slash" d="m3 3 18 18"/></svg>
+          </button>
+        </div>
       </div>
       <p id="auth-feedback" class="form-error" role="alert" hidden></p>
       <button class="primary-button auth-submit" type="submit"><span id="auth-submit-label">Sign in</span><span aria-hidden="true">→</span></button>

@@ -31,6 +31,7 @@ const icons={
   x:'<path d="m6 6 12 12M18 6 6 18"/>',
   user:'<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
   lock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/>',
+  'password-eye':'<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path class="password-slash" d="m3 3 18 18"/>',
   shield:'<path d="m12 2 9 4v6c0 6-9 10-9 10S3 18 3 12V6Z"/><path d="m8 12 3 3 5-6"/>',
   check:'<path d="m5 12 4 4L20 5"/>',
   tag:'<path d="M21 12 12 3H3v9l9 9Z"/><circle cx="7.5" cy="7.5" r="1"/>',
@@ -184,7 +185,7 @@ function loadDeliveryAddress(){
   try{
     const saved=JSON.parse(localStorage.getItem(key)||'null');
     if(typeof saved?.address==='string'&&saved.address.trim().length>=5&&saved.address.length<=300&&validDeliveryCoordinates(saved.lat,saved.lng)){
-      state.address={address:saved.address,lat:saved.lat,lng:saved.lng,phone:typeof saved.phone==='string'?saved.phone.slice(0,30):'',source:saved.source==='google_maps'?'google_maps':'manual'};
+      state.address={address:saved.address,lat:saved.lat,lng:saved.lng,phone:typeof saved.phone==='string'?saved.phone.slice(0,30):''};
     }
   }catch{
     // A stale or inaccessible browser preference must not prevent sign-in.
@@ -233,16 +234,15 @@ function showAddress(continueToCheckout=false){
   showModal(`<div class="modal-body-custom">
     <div class="section-eyebrow">GOOD FOOD, RIGHT TO YOUR DOOR</div>
     <h2 id="modal-title" style="margin-top:10px">Delivery details</h2>
-    <form id="address-form" data-next="${continueToCheckout?'checkout':''}" data-source="${address?.source||'manual'}">
+    <form id="address-form" data-next="${continueToCheckout?'checkout':''}">
       <div class="form-field">
         <button type="button" class="secondary-button" data-action="locate-address">${icon('pin')} Use my current location</button>
-        <p class="field-hint">Uses your device location to find a street address with Google Maps. Review the address before saving.</p>
-        <p class="field-hint delivery-lookup-status" id="address-lookup-status" role="status" hidden></p>
+        <p class="field-hint">Use your device location to fill in the map coordinates. Enter the street address below.</p>
+        <p class="field-hint delivery-location-status" id="address-location-status" role="status" hidden></p>
       </div>
       <div class="form-field delivery-address-field">
         <label class="field-label" for="address-name">Delivery address</label>
         <textarea class="form-control" id="address-name" name="address" rows="2" required minlength="5" maxlength="300" autocomplete="street-address" placeholder="Street address, building or apartment">${esc(address?.address||'')}</textarea>
-        <span class="maps-attribution" id="address-attribution" translate="no" ${address?.source==='google_maps'?'':'hidden'}>Google Maps</span>
       </div>
       <details class="form-field" id="address-coordinates">
         <summary class="field-label">Map coordinates</summary>
@@ -257,11 +257,11 @@ function showAddress(continueToCheckout=false){
     </form>
   </div>`);
 }
-function addressLookupStatus(form,message,error=false){
-  const line=$('#address-lookup-status',form);
+function addressLocationStatus(form,message,error=false){
+  const line=$('#address-location-status',form);
   line.textContent=message;
   line.hidden=false;
-  line.classList.toggle('lookup-error',error);
+  line.classList.toggle('location-error',error);
 }
 async function locateDeliveryAddress(button){
   const form=button.closest('#address-form');
@@ -269,54 +269,27 @@ async function locateDeliveryAddress(button){
   const userId=state.user.id;
   const isActive=()=>state.user?.id===userId&&$('#address-form')===form&&!$('#app-modal').hidden;
   if(!navigator.geolocation){
-    addressLookupStatus(form,'Location is unavailable in this browser. Enter your address and map coordinates manually.',true);
+    addressLocationStatus(form,'Location is unavailable in this browser. Enter your address and map coordinates manually.',true);
     return;
   }
   const submit=$('[type=submit]',form);
-  const addressInput=$('#address-name',form);
   button.disabled=submit.disabled=true;
-  addressLookupStatus(form,'Finding your device location…');
+  addressLocationStatus(form,'Finding your device location…');
   try{
-    let position;
-    try{
-      position=await new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:10000,maximumAge:0}));
-    }catch(error){
-      if(isActive())addressLookupStatus(form,error.code===1?'Location permission was denied. Allow it in your browser, or enter your delivery details manually.':'Could not find your location. Try again or enter your delivery details manually.',true);
-      return;
-    }
+    const {coords}=await new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:10000,maximumAge:0}));
     if(!isActive())return;
-    const lat=Number(position.coords.latitude.toFixed(6));
-    const lng=Number(position.coords.longitude.toFixed(6));
-    $('#address-lat',form).value=lat;
-    $('#address-lng',form).value=lng;
-    // The prior address belongs to the prior coordinates until a new lookup succeeds.
-    addressInput.value='';
-    addressInput.readOnly=true;
-    form.dataset.source='manual';
-    $('#address-attribution',form).hidden=true;
-    addressLookupStatus(form,'Finding the street address with Google Maps…');
-    try{
-      const result=await api('/api/delivery/reverse-geocode',{method:'POST',body:{lat,lng}});
-      if(!isActive())return;
-      if($('#address-lat',form).valueAsNumber!==lat||$('#address-lng',form).valueAsNumber!==lng){
-        addressLookupStatus(form,'Coordinates changed during the lookup. Enter the matching street address.');
-        return;
-      }
-      addressInput.value=result.address;
-      form.dataset.source=result.source;
-      $('#address-attribution',form).hidden=false;
-      addressLookupStatus(form,'Address found. Check the street address and add any apartment or unit details before saving.');
-    }catch(error){
-      if(isActive())addressLookupStatus(form,errorText(error)+' Your device coordinates are ready.',true);
-    }finally{
-      addressInput.readOnly=false;
-      if(isActive())addressInput.focus();
-    }
+    if(!validDeliveryCoordinates(coords.latitude,coords.longitude))throw new Error('Invalid device coordinates');
+    $('#address-lat',form).value=coords.latitude.toFixed(6);
+    $('#address-lng',form).value=coords.longitude.toFixed(6);
+    addressLocationStatus(form,'Map coordinates are ready. Enter or check the matching street address before saving.');
+    $('#address-name',form).focus();
+  }catch(error){
+    if(isActive())addressLocationStatus(form,error?.code===1?'Location permission was denied. Allow it in your browser, or enter your delivery details manually.':'Could not find your location. Try again or enter your delivery details manually.',true);
   }finally{
     button.disabled=submit.disabled=false;
   }
 }
-async function showCheckout(){if(!requireCustomer()||!state.cart.item_count)return;if(!state.address)return showAddress(true);let q;try{q=await refreshQuote();}catch(e){toast(errorText(e),true);return;}if(!q)return;renderBasket();showModal(`<div class="modal-body-custom"><div class="section-eyebrow">ONE BASKET. A LOT TO LOOK FORWARD TO.</div><h2 id="modal-title" style="margin-top:10px">A good meal is on its way.</h2><p>We’ve checked prices and availability. Let’s make it official.</p><form id="checkout-form"><div class="form-field"><span class="field-label">Delivery address</span><p class="confirmed-delivery-address">${esc(state.address.address)}</p>${state.address.source==='google_maps'?'<span class="maps-attribution" translate="no">Google Maps</span>':''}<button type="button" class="small-text-button" data-action="address" data-next="checkout">Change delivery details</button></div><div class="form-field"><label class="field-label" for="checkout-phone">Contact number</label><input id="checkout-phone" name="phone" class="form-control" type="tel" value="${attr(state.address.phone||state.user.phone||'')}" required minlength="8" maxlength="20" autocomplete="tel" placeholder="Your driver will contact you here"></div><div class="form-field"><label class="field-label" for="checkout-note">Delivery note <span class="muted">Optional</span></label><textarea id="checkout-note" class="form-control" name="note" maxlength="300" rows="2" placeholder="Building, floor, a little direction…"></textarea></div><label class="field-label">How would you like to pay?</label><div class="choice-row"><label class="option-label"><input name="payment_method" type="radio" value="cod" checked>${icon('cash')}Cash on delivery</label><label class="option-label"><input name="payment_method" type="radio" value="online">${icon('card')}Online sandbox</label></div><p class="field-hint">Online payments use a clearly labeled local test gateway. No bank or card information is collected.</p><div class="checkout-summary">${q.groups.map(g=>`<div class="total-row"><span>${esc(g.restaurant_name)}<small style="display:block;font-size:8px;margin-top:3px">${money(g.subtotal)} food + ${money(g.delivery_fee)} delivery${g.discount?' − '+money(g.discount)+' savings':''}</small></span><span>${money(g.total)}</span></div>`).join('')}<div class="total-row grand"><span>Total to pay</span><span>${money(q.total)}</span></div></div><button class="primary-button" type="submit" style="width:100%;justify-content:space-between"><span>Place my order</span><span>${money(q.total)} ${icon('arrow-right')}</span></button><p class="field-hint" style="text-align:center;margin-top:12px">Your order is split for each restaurant. Delivery fees are charged separately for each pickup.</p></form></div>`);}
+async function showCheckout(){if(!requireCustomer()||!state.cart.item_count)return;if(!state.address)return showAddress(true);let q;try{q=await refreshQuote();}catch(e){toast(errorText(e),true);return;}if(!q)return;renderBasket();showModal(`<div class="modal-body-custom"><div class="section-eyebrow">ONE BASKET. A LOT TO LOOK FORWARD TO.</div><h2 id="modal-title" style="margin-top:10px">A good meal is on its way.</h2><p>We’ve checked prices and availability. Let’s make it official.</p><form id="checkout-form"><div class="form-field"><span class="field-label">Delivery address</span><p class="confirmed-delivery-address">${esc(state.address.address)}</p><button type="button" class="small-text-button" data-action="address" data-next="checkout">Change delivery details</button></div><div class="form-field"><label class="field-label" for="checkout-phone">Contact number</label><input id="checkout-phone" name="phone" class="form-control" type="tel" value="${attr(state.address.phone||state.user.phone||'')}" required minlength="8" maxlength="20" autocomplete="tel" placeholder="Your driver will contact you here"></div><div class="form-field"><label class="field-label" for="checkout-note">Delivery note <span class="muted">Optional</span></label><textarea id="checkout-note" class="form-control" name="note" maxlength="300" rows="2" placeholder="Building, floor, a little direction…"></textarea></div><label class="field-label">How would you like to pay?</label><div class="choice-row"><label class="option-label"><input name="payment_method" type="radio" value="cod" checked>${icon('cash')}Cash on delivery</label><label class="option-label"><input name="payment_method" type="radio" value="online">${icon('card')}Online sandbox</label></div><p class="field-hint">Online payments use a clearly labeled local test gateway. No bank or card information is collected.</p><div class="checkout-summary">${q.groups.map(g=>`<div class="total-row"><span>${esc(g.restaurant_name)}<small style="display:block;font-size:8px;margin-top:3px">${money(g.subtotal)} food + ${money(g.delivery_fee)} delivery${g.discount?' − '+money(g.discount)+' savings':''}</small></span><span>${money(g.total)}</span></div>`).join('')}<div class="total-row grand"><span>Total to pay</span><span>${money(q.total)}</span></div></div><button class="primary-button" type="submit" style="width:100%;justify-content:space-between"><span>Place my order</span><span>${money(q.total)} ${icon('arrow-right')}</span></button><p class="field-hint" style="text-align:center;margin-top:12px">Your order is split for each restaurant. Delivery fees are charged separately for each pickup.</p></form></div>`);}
 function workspaceHeading(heading,description,extra=''){return `<div class="workspace-heading"><div><div class="section-eyebrow" style="margin-bottom:9px">YOUR GATHER NEIGHBORHOOD</div><h1>${esc(heading)}</h1><p>${esc(description)}</p></div>${extra}</div>`;}
 function metric(label,value,note=''){return `<div class="metric"><small>${esc(label)}</small><strong>${esc(value)}</strong>${note?`<p>${esc(note)}</p>`:''}</div>`;}
 function orderCard(o,{actions=''}={}){const restaurants=(o.suborders||[]).map(s=>s.restaurant_name).join(' + ');return `<article class="panel-card order-card" data-order="${attr(o.id)}" tabindex="0" role="link" aria-label="View order ${attr(o.code)}"><div class="order-head"><div><strong>${esc(o.code)}</strong><div class="order-date">${date(o.created_at)}</div></div>${status(o.status)}</div><div class="order-restaurants">${esc(restaurants||'Your restaurant order')}</div><p>${esc(o.address)}</p><div class="order-foot"><span>${(o.suborders||[]).reduce((n,s)=>n+(s.items||[]).reduce((sum,i)=>sum+i.quantity,0),0)} items · ${esc(title(o.payment_method))} ${status(o.payment_status)}</span><strong>${money(o.payable_total??o.total)}</strong></div>${actions}</article>`;}
@@ -384,7 +357,7 @@ function adminOperations(d){const active=d.orders.filter(o=>!['delivered','cance
 function adminAccounts(d){return `<div class="section-heading"><div><h2>Good people, working together.</h2><p>Create staff accounts and manage access for every role.</p></div><button class="primary-button" data-action="new-account">${icon('plus')}Add account</button></div><div class="table-responsive"><table class="data-table"><thead><tr><th>Person</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>${d.users.map(u=>`<tr><td><strong>${esc(u.name)}</strong><div class="muted" style="font-size:9px;margin-top:4px">${esc(u.email)}</div></td><td>${esc(title(u.role))}</td><td>${status(u.active?'active':'disabled')}</td><td>${u.id===state.user.id?'<span class="muted">Your account</span>':`<button class="${u.active?'secondary':'primary'}-button" data-action="account-active" data-id="${attr(u.id)}" data-active="${!u.active}">${u.active?'Disable':'Enable'}</button>`}</td></tr>`).join('')}</tbody></table></div>`;}
 function adminSettings(d){const labels={max_group_distance_km:['Maximum restaurant grouping distance','km'],dispatch_radius_km:['Driver dispatch search radius','km'],base_delivery_fee:['Base delivery fee per restaurant','VND'],per_km_fee:['Additional delivery fee per km','VND'],commission_rate:['Restaurant commission rate','Fraction, e.g. 0.10 = 10%']};return `<div class="panel-card"><h3>The little rules that keep things moving.</h3><p>Distance rules validate multi-restaurant baskets. Drivers are offered trips by proximity and an efficient pickup route. Changes affect new quotes and dispatch attempts.</p><form id="config-form" style="margin-top:23px">${Object.entries(labels).map(([key,[label,hint]])=>`<div class="form-field"><label class="field-label" for="config-${key}">${label}</label><input class="form-control" id="config-${key}" name="${key}" type="number" step="${key==='commission_rate'?'0.01':key.includes('km')?'0.1':'1'}" min="${key.includes('km')?'0.1':'0'}" ${key==='commission_rate'?'max="0.5"':''} value="${attr(d.config[key])}" required><p class="field-hint">${hint}</p></div>`).join('')}<button class="primary-button" type="submit">Save dispatch settings ${icon('check')}</button></form></div>`;}
 function adminSettlements(d){return `<div class="section-heading"><div><h2>A fair share for everyone.</h2><p>Weekly settlement · Sundays at 23:59, Ho Chi Minh City</p></div></div><p class="settlement-note">Restaurant payout = food revenue minus commission. Driver net = delivery earnings minus COD collected. Negative driver balances are owed to the platform. Each delivery is reconciled once.</p><div class="btn-row" style="margin-bottom:20px"><button class="primary-button" data-action="run-settlements" data-current="false">${icon('wallet')}Reconcile due periods</button><button class="secondary-button" data-action="confirm-current-settlement">Include current period</button></div>${d.settlements?.length?`<div class="table-responsive"><table class="data-table"><thead><tr><th>Recipient / period</th><th>Gross</th><th>Commission / COD</th><th>Net</th><th>Status</th><th>Action</th></tr></thead><tbody>${d.settlements.map(s=>`<tr><td><strong>${esc(s.party_name)}</strong><div class="muted" style="font-size:9px;margin-top:5px">${esc(title(s.party_type))} · ${esc(String(s.period_start).slice(0,10))}–${esc(String(s.period_end).slice(0,10))}</div></td><td>${money(s.gross_amount)}</td><td>${money(s.party_type==='driver'?s.cod_collected:s.commission)}</td><td style="color:${s.amount<0?'#b66b4f':'#56803c'}">${money(s.amount)}${s.amount<0?'<div style="font-size:8px">Owed to platform</div>':''}</td><td>${status(s.status)}</td><td>${s.status!=='paid'?`<button class="secondary-button" data-action="settlement-confirm" data-id="${attr(s.id)}" data-name="${attr(s.party_name)}" data-amount="${s.amount}">Mark paid</button>`:'—'}</td></tr>`).join('')}</tbody></table></div>`:empty('A clean slate, ready to reconcile.','Complete deliveries to create restaurant and driver settlements. Weekly processing is idempotent.',null,'','wallet')}`;}
-function showAccountCreator(){showModal(`<div class="modal-body-custom"><div class="section-eyebrow">GROW THE NEIGHBORHOOD</div><h2 id="modal-title" style="margin-top:10px">A new face at Gather.</h2><p>Create an account with the right access. Restaurant accounts receive their own restaurant and menu.</p><form id="account-create-form"><div class="form-row"><div class="form-field"><label class="field-label" for="new-name">Full name</label><input class="form-control" id="new-name" name="name" required minlength="2" maxlength="100"></div><div class="form-field"><label class="field-label" for="new-role">Account role</label><select class="form-select" name="role" id="new-role"><option value="customer">Customer</option><option value="restaurant">Restaurant owner</option><option value="driver">Driver</option><option value="admin">Administrator</option></select></div></div><div class="form-field"><label class="field-label" for="new-email">Email address</label><input class="form-control" id="new-email" name="email" type="email" required></div><div class="form-row"><div class="form-field"><label class="field-label" for="new-password">Initial password</label><input class="form-control" id="new-password" name="password" type="password" autocomplete="new-password" minlength="8" required></div><div class="form-field"><label class="field-label" for="new-phone">Phone number</label><input class="form-control" id="new-phone" name="phone" type="tel"></div></div><fieldset id="new-restaurant-fields" hidden><legend class="detail-subheading">Restaurant details</legend><div class="form-field"><label class="field-label" for="new-r-name">Restaurant name</label><input class="form-control" id="new-r-name" name="r_name" maxlength="150"></div><div class="form-row"><div class="form-field"><label class="field-label" for="new-r-category">Cuisine / category</label><input class="form-control" id="new-r-category" name="r_category" value="Vietnamese"></div><div class="form-field"><label class="field-label" for="new-r-image">Image URL</label><input class="form-control" id="new-r-image" name="r_image" type="url" placeholder="https://…"></div></div><div class="form-field"><label class="field-label" for="new-r-description">Description</label><textarea class="form-control" id="new-r-description" name="r_description" rows="2"></textarea></div><div class="form-field"><label class="field-label" for="new-r-address">Pickup address</label><input class="form-control" id="new-r-address" name="r_address"></div><div class="form-row"><div class="form-field"><label class="field-label" for="new-r-lat">Pickup latitude</label><input class="form-control" id="new-r-lat" name="r_lat" type="number" step="any" min="-90" max="90" value="10.7769"></div><div class="form-field"><label class="field-label" for="new-r-lng">Pickup longitude</label><input class="form-control" id="new-r-lng" name="r_lng" type="number" step="any" min="-180" max="180" value="106.7009"></div></div></fieldset><button class="primary-button" type="submit" style="width:100%">Create account ${icon('check')}</button></form></div>`);}
+function showAccountCreator(){showModal(`<div class="modal-body-custom"><div class="section-eyebrow">GROW THE NEIGHBORHOOD</div><h2 id="modal-title" style="margin-top:10px">A new face at Gather.</h2><p>Create an account with the right access. Restaurant accounts receive their own restaurant and menu.</p><form id="account-create-form"><div class="form-row"><div class="form-field"><label class="field-label" for="new-name">Full name</label><input class="form-control" id="new-name" name="name" required minlength="2" maxlength="100"></div><div class="form-field"><label class="field-label" for="new-role">Account role</label><select class="form-select" name="role" id="new-role"><option value="customer">Customer</option><option value="restaurant">Restaurant owner</option><option value="driver">Driver</option><option value="admin">Administrator</option></select></div></div><div class="form-field"><label class="field-label" for="new-email">Email address</label><input class="form-control" id="new-email" name="email" type="email" required></div><div class="form-row"><div class="form-field"><label class="field-label" for="new-password">Initial password</label><div class="password-field"><input class="form-control" id="new-password" name="password" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" minlength="8" required><button class="password-toggle" type="button" data-action="toggle-password" aria-controls="new-password" aria-label="Show password" title="Show password">${icon('password-eye')}</button></div></div><div class="form-field"><label class="field-label" for="new-phone">Phone number</label><input class="form-control" id="new-phone" name="phone" type="tel"></div></div><fieldset id="new-restaurant-fields" hidden><legend class="detail-subheading">Restaurant details</legend><div class="form-field"><label class="field-label" for="new-r-name">Restaurant name</label><input class="form-control" id="new-r-name" name="r_name" maxlength="150"></div><div class="form-row"><div class="form-field"><label class="field-label" for="new-r-category">Cuisine / category</label><input class="form-control" id="new-r-category" name="r_category" value="Vietnamese"></div><div class="form-field"><label class="field-label" for="new-r-image">Image URL</label><input class="form-control" id="new-r-image" name="r_image" type="url" placeholder="https://…"></div></div><div class="form-field"><label class="field-label" for="new-r-description">Description</label><textarea class="form-control" id="new-r-description" name="r_description" rows="2"></textarea></div><div class="form-field"><label class="field-label" for="new-r-address">Pickup address</label><input class="form-control" id="new-r-address" name="r_address"></div><div class="form-row"><div class="form-field"><label class="field-label" for="new-r-lat">Pickup latitude</label><input class="form-control" id="new-r-lat" name="r_lat" type="number" step="any" min="-90" max="90" value="10.7769"></div><div class="form-field"><label class="field-label" for="new-r-lng">Pickup longitude</label><input class="form-control" id="new-r-lng" name="r_lng" type="number" step="any" min="-180" max="180" value="106.7009"></div></div></fieldset><button class="primary-button" type="submit" style="width:100%">Create account ${icon('check')}</button></form></div>`);}
 function showReason({kind,id,heading,description,action,status:nextStatus}){showModal(`<div class="modal-body-custom"><h2 id="modal-title">${esc(heading)}</h2><p>${esc(description)}</p><form id="reason-form" data-kind="${attr(kind)}" data-id="${attr(id)}" data-next-status="${attr(nextStatus||'')}"><div class="form-field"><label class="field-label" for="action-reason">A clear reason</label><textarea class="form-control" id="action-reason" name="reason" rows="3" minlength="5" maxlength="500" required placeholder="Tell us what happened and what needs to be done."></textarea></div><button class="${['cancel','admin-cancel','restaurant-reject'].includes(kind)?'danger':'primary'}-button" style="width:100%" type="submit">${esc(action)} ${icon('arrow-right')}</button></form></div>`);}
 function showConfirmation({heading,description,action,data}){showModal(`<div class="modal-body-custom"><h2 id="modal-title">${esc(heading)}</h2><p>${esc(description)}</p><div class="btn-row"><button class="secondary-button" data-action="close-modal">Go back</button><button class="primary-button" data-action="${attr(action)}" ${Object.entries(data||{}).map(([k,v])=>`data-${k}="${attr(v)}"`).join(' ')}>Confirm ${icon('check')}</button></div></div>`);}
 async function handleAction(action,el){const d=el.dataset;switch(action){
@@ -396,6 +369,15 @@ case 'track':closeModal();go('orders/'+d.id);break;
 case 'retry':await routeView();break;
 case 'retry-session':await boot();break;
 case 'account':showAccount();break;
+case 'toggle-password':{
+  const field=el.closest('.password-field')?.querySelector('input');
+  if(!field)break;
+  const visible=field.type==='password';
+  field.type=visible?'text':'password';
+  const label=visible?'Hide password':'Show password';
+  el.setAttribute('aria-label',label);el.title=label;
+  break;
+}
 case 'workspace':closeModal();if(state.user)go(state.user.role==='customer'?'orders':state.user.role);else redirectToSignIn();break;
 case 'logout':await api('/api/auth/logout',{method:'POST',body:{}});state.user=null;loadDeliveryAddress();state.view='signed-out';stopGPS();resetSessionViews();updateAccount();closeModal();setMain(loading());redirectToSignIn();break;
 case 'close-modal':closeModal();break;
@@ -500,7 +482,7 @@ case 'address-form':{
     throw new Error('Use your current location or enter valid latitude and longitude for the delivery address.');
   }
   if(data.address.trim().length<5)throw new Error('Enter the street address for your delivery.');
-  saveDeliveryAddress({address:data.address.trim(),lat,lng,phone:data.phone.trim(),source:form.dataset.source});
+  saveDeliveryAddress({address:data.address.trim(),lat,lng,phone:data.phone.trim()});
   state.quote=null;
   updateDeliveryLabel();
   renderBasket();

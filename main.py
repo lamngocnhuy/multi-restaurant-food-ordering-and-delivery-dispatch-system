@@ -15,7 +15,6 @@ from database.connection import Base, engine, get_db, SessionLocal
 from models.entities import User
 from properties.config import ROOT, SEED_DEMO, ENABLE_SCHEDULER, TRUSTED_HOSTS, APP_ENV
 from api.routes import router
-from api.geocoding import router as geocoding_router
 from services.seed import seed
 from services.reconciliation import reconcile
 from services.commerce import retry_waiting_dispatch
@@ -74,7 +73,7 @@ async def browser_security(request:Request,call_next):
     response.headers['X-Frame-Options']='DENY'
     response.headers['Referrer-Policy']='strict-origin-when-cross-origin'
     response.headers['Permissions-Policy']='geolocation=(self), camera=(), microphone=()'
-    response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://unpkg.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self'; frame-src https://www.openstreetmap.org https://maps.google.com https://www.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://unpkg.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self'; frame-src https://www.openstreetmap.org; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     if request.url.path.startswith('/api') or request.url.path.startswith('/payment'):response.headers['Cache-Control']='no-store'
     if APP_ENV=='production':response.headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains'
     return response
@@ -85,7 +84,6 @@ async def integrity_error(request,exc):
     return JSONResponse({'detail':'This action conflicts with an existing record or another update. Refresh and try again.'},status_code=409)
 
 app.include_router(router)
-app.include_router(geocoding_router)
 app.mount('/static',StaticFiles(directory=str(ROOT/'asset')),name='static')
 app.mount('/asset',StaticFiles(directory=str(ROOT/'asset')),name='asset')
 templates=Jinja2Templates(directory=str(ROOT/'controls'))

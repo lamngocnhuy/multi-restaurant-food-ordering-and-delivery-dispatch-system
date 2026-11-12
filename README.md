@@ -58,13 +58,11 @@ All four roles sign in on the same page (`/` or `/sign-in`). The account determi
 
 Other seeded restaurant owners are `restaurant2@localtable.vn` through `restaurant8@localtable.vn` (Pizza & Co., The Green Bowl, Seoul Table, Burger Theory, Mori Sushi, Cloud Nine Tea, Butter & Crumb). A second driver is `driver2@localtable.vn`; all use the same configured demonstration password.
 
-## Delivery address lookup
+## Delivery address
 
-Customers start without a delivery address. Their confirmed address is saved per account in the current browser. Signed-out visitors see sign-in and registration, and staff go directly to their workspaces.
+Customers start without a delivery address. Enter the street address, including building or unit details, and use **Use my current location** to fill in the coordinates from the device. Browser location access requires localhost or HTTPS. You can also enter coordinates manually. The confirmed address is saved per account in the current browser.
 
-To fill the street address from **Use my current location**, enable the [Google Geocoding API](https://developers.google.com/maps/documentation/geocoding/cloud-setup) with billing in your Google Cloud project. Add your restricted server key as `GOOGLE_MAPS_API_KEY` in the local `.env`, then restart Gather (`docker compose up -d --force-recreate --no-deps app` for Docker). Keep the key on the server.
-
-Allow browser location access on localhost or HTTPS. Gather sends the device coordinates to Google Maps for the lookup, then lets you review the street address and add unit details before saving. Without the key or a matching result, use the captured coordinates and enter the street address manually. You can also enter both the address and coordinates by hand.
+The device location button fills coordinates only. Delivery tracking maps use OpenStreetMap.
 
 ## Complete order walkthrough
 

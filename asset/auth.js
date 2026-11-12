@@ -11,6 +11,7 @@
   const phone = document.querySelector('#auth-phone');
   const email = document.querySelector('#auth-email');
   const password = document.querySelector('#auth-password');
+  const passwordToggle = document.querySelector('[aria-controls="auth-password"]');
   const demo = document.querySelector('.auth-demo');
   const tabs = [...document.querySelectorAll('[data-auth-mode]')];
   const destinations = Object.freeze({customer:'/order',restaurant:'/restaurant',driver:'/driver',admin:'/admin'});
@@ -21,6 +22,15 @@
     feedback.hidden = !message;
   }
 
+  function setPasswordVisible(visible) {
+    password.type = visible ? 'text' : 'password';
+    const label = visible ? 'Hide password' : 'Show password';
+    passwordToggle.setAttribute('aria-label', label);
+    passwordToggle.title = label;
+  }
+
+  passwordToggle.addEventListener('click', () => setPasswordVisible(password.type === 'password'));
+
   function changeMode(next) {
     mode = next === 'register' ? 'register' : 'login';
     const registering = mode === 'register';
@@ -28,6 +38,7 @@
     document.querySelector('#auth-phone-field').hidden = !registering;
     name.disabled = phone.disabled = !registering;
     name.required = registering;
+    setPasswordVisible(false);
     password.minLength = registering ? 8 : 1;
     password.autocomplete = registering ? 'new-password' : 'current-password';
     password.placeholder = registering ? 'At least 8 characters' : 'Your password';

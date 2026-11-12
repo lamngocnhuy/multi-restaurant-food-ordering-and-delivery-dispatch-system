@@ -4,10 +4,8 @@
 .route-stop-label{background:transparent;border:0;box-shadow:none;color:#fff;font-size:10px;font-weight:700;padding:0;text-shadow:0 1px 2px #0004}.route-stop-label:before{display:none}.route-map-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:#8c9c7d;margin-top:11px}.route-map-legend span{display:flex;gap:5px;align-items:center}.route-map-legend i{width:7px;height:7px;border-radius:50%;display:inline-block}.driver-route-map{height:290px;margin-top:13px}@media(max-width:760px){.driver-route-map{height:240px}.route-map-legend{font-size:9px;gap:12px}}
 .topbar-context{flex:1;font-family:'Manrope',sans-serif;font-size:15px;font-weight:750;color:var(--ink)}
 
-.delivery-lookup-status:not([hidden]){margin-top:8px;padding:9px 12px;background:#edf4ec;border-radius:8px;color:#274731}
-.delivery-lookup-status.lookup-error{background:#fff4e6;color:#654422}
-.maps-attribution{display:inline-block;margin-top:5px;margin-right:12px;color:#5e5e5e;font:400 12px/1.4 system-ui,sans-serif;white-space:nowrap}
-.maps-attribution[hidden]{display:none}
+.delivery-location-status:not([hidden]){margin-top:8px;padding:9px 12px;background:#edf4ec;border-radius:8px;color:#274731}
+.delivery-location-status.location-error{background:#fff4e6;color:#654422}
 .confirmed-delivery-address{margin:0 0 5px;overflow-wrap:anywhere}
 #address-coordinates summary{cursor:pointer}
 #address-coordinates .form-field{margin-bottom:0}
@@ -21,3 +19,10 @@
 
 /* Keep Leaflet's panes and controls below the page's dialogs. */
 .tracking-map{isolation:isolate}
+
+.password-field{position:relative}
+.password-field>.form-control{padding-inline-end:46px}
+.password-toggle{position:absolute;inset-block:0;inset-inline-end:0;width:44px;display:grid;place-items:center;background:transparent;color:#56684d;border-radius:0 8px 8px 0}
+.password-toggle:hover{background:#f0f4ec;color:var(--green-dark)}
+.password-toggle .password-slash{display:none}
+.password-field>input[type="text"]+.password-toggle .password-slash{display:block}

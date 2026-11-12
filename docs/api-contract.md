@@ -16,7 +16,8 @@ All catalog list, search, and detail routes require an active customer session. 
 
 ## Cart and checkout (customer)
 
-- `POST /api/delivery/reverse-geocode` with `{"lat":10.7769,"lng":106.7009}` → `{"address":"…","source":"google_maps"}`. Uses the server's optional `GOOGLE_MAPS_API_KEY`. Returns `404` for no street-level match, `429` for requests in quick succession, or `503` when unavailable; the customer can enter the address manually.
+Customers enter their street address. Coordinates are used to estimate delivery fees and are submitted separately from the address text. The server does not look up addresses from coordinates.
+
 - GET `/api/cart` -> `{items:[{id,menu_item_id,restaurant_id,restaurant_name,name,image,quantity,options:{size,sugar,ice,toppings:[]},note,base_price,extra_price,unit_price,line_total,available}],groups:[{restaurant_id,restaurant_name,items,subtotal}],subtotal,item_count}`.
 - POST `/api/cart/items` `{menu_item_id,quantity:1,options:{size?,sugar?,ice?,toppings:[]},note:""}` -> full cart.
 - PATCH `/api/cart/items/{id}` `{quantity?,options?,note?}` -> cart. DELETE same -> cart. DELETE `/api/cart` -> cart.
