@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hệ Thống Đặt Món & Điều Phối Giao Hàng Đa Nhà Hàng</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+</head>
+<body class="bg-light">
+  <!-- THANH ĐIỀU HƯỚNG 4 VAI TRÒ -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top shadow-sm">
+    <div class="container">
+      <a class="navbar-brand fw-bold text-warning" href="#">FOOD DISPATCH SYSTEM</a>
+      <div class="btn-group" role="group">
+        <button class="btn btn-outline-warning active" onclick="switchRole('CUSTOMER', this)">Khách Hàng</button>
+        <button class="btn btn-outline-warning" onclick="switchRole('RESTAURANT', this)">Bếp Nhà Hàng</button>
+        <button class="btn btn-outline-warning" onclick="switchRole('DRIVER', this)">Tài Xế</button>
+        <button class="btn btn-outline-warning" onclick="switchRole('ADMIN', this)">Admin</button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container my-4">
+    <!-- 1. PHÂN HỆ KHÁCH HÀNG -->
+    <div id="view-CUSTOMER" class="role-view">
+      <div class="row g-4">
+        <div class="col-lg-8">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h4 class="fw-bold mb-0">Thực Đơn Đa Nhà Hàng</h4>
+            <input type="text" id="searchInput" class="form-control w-50" placeholder="Tìm món (VD: Phở, Cơm)..." onkeyup="loadMenu()" />
+          </div>
+          <div id="menuList" class="row g-3"></div>
+        </div>
+
+        <div class="col-lg-4">
+          <div class="card shadow-sm border-0">
+            <div class="card-header bg-warning fw-bold">Giỏ Hàng Của Bạn (Quy tắc REQ-9)</div>
+            <div class="card-body">
+              <div id="cartItems" class="mb-3 small text-muted">Giỏ hàng đang trống</div>
+              <hr />
+              <div class="d-flex justify-content-between fw-bold mb-3">
+                <span>Tổng cộng (gồm 15k ship):</span>
+                <span id="cartTotal" class="text-danger">0 VNĐ</span>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small fw-bold">Địa chỉ giao hàng:</label>
+                <input type="text" id="addressInput" class="form-control form-control-sm" value="19 Nguyễn Hữu Thọ, Quận 7" />
+              </div>
+              <div class="mb-3">
+                <label class="form-label small fw-bold">Phương thức thanh toán:</label>
+                <select id="paymentSelect" class="form-select form-select-sm">
+                  <option value="COD">Tiền mặt khi nhận hàng (COD)</option>
+                  <option value="ONLINE">Chuyển khoản trực tuyến (ONLINE)</option>
+                </select>
+              </div>
+              <button class="btn btn-dark w-100 fw-bold" onclick="checkoutOrder()">ĐẶT HÀNG NGAY</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h5 class="fw-bold mt-5 mb-3">Theo Dõi Đơn Hàng Của Tôi</h5>
+      <div id="customerOrders" class="row g-3"></div>
+    </div>
+
+    <!-- 2. PHÂN HỆ BẾP NHÀ HÀNG -->
+    <div id="view-RESTAURANT" class="role-view d-none">
+      <h4 class="fw-bold mb-3">Màn Hình Bếp - Tiếp Nhận & Xử Lý Đơn</h4>
+      <div id="restaurantOrders" class="row g-3"></div>
+    </div>
+
+    <!-- 3. PHÂN HỆ TÀI XẾ -->
+    <div id="view-DRIVER" class="role-view d-none">
+      <h4 class="fw-bold mb-3">Ứng Dụng Tài Xế - Nhận Đơn Tự Động (Timeout 30s)</h4>
+      <div id="driverOrders" class="row g-3"></div>
+    </div>
+
+    <!-- 4. PHÂN HỆ ADMIN -->
+    <div id="view-ADMIN" class="role-view d-none">
+      <h4 class="fw-bold mb-3">Admin Dashboard - Giám Sát & Đối Soát Hoàn Tiền (ST-09)</h4>
+      <div id="adminOrders" class="table-responsive bg-white p-3 rounded shadow-sm"></div>
+    </div>
+  </div>
+
+  <!-- MODAL CẢNH BÁO ĐỔI NHÀ HÀNG (REQ-9) -->
+  <div class="modal fade" id="req9Modal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header bg-warning">
+          <h5 class="modal-title fw-bold">Cảnh báo đổi nhà hàng (REQ-9)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          Giỏ hàng của bạn đang chứa món ăn từ nhà hàng khác. Mỗi đơn hàng chỉ hỗ trợ đặt từ <strong>01 nhà hàng duy nhất</strong>. Bạn có muốn xóa giỏ cũ để thêm món mới không?
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Giữ giỏ cũ</button>
+          <button type="button" class="btn btn-danger" onclick="confirmResetCart()">Xóa giỏ cũ & Thêm mới</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // =========================================================================
+    // KHU VỰC CẤU HÌNH ẢNH MÓN ĂN TRONG THƯ MỤC asset/
+    // =========================================================================
+    const FOOD_IMAGES = {
+      "Phở Bò Tái Nạm": "/static/phobo.png",
+      "Phở Đặc Biệt Bát Đá": "/static/phobatda.jpg",
+      "Cơm Tấm Sườn Cốt Lết": "/static/comsuon.jpg",
+      "Cơm Tấm Sườn Bì Chả Trứng": "/static/comdacbiet.jpg",
+      "DEFAULT": "https://placehold.co/600x400?text=Mon+An"
+    };
+
+    function getFoodImage(foodName, apiImageUrl) {
+      return FOOD_IMAGES[foodName] || apiImageUrl || FOOD_IMAGES["DEFAULT"];
+    }
+    // =========================================================================
+
+    let customerId = "";
+    let pendingFoodId = null;
+    const req9Modal = new bootstrap.Modal(document.getElementById("req9Modal"));
+
+    async function initApp() {
+      const res = await fetch("/api/v1/seed", { method: "POST" });
+      const data = await res.json();
+      customerId = data.customer_id;
+      await loadMenu();
+      await loadCart();
+      await loadOrders();
+      setInterval(loadOrders, 3000);
+    }
+
+    function switchRole(role, btn) {
+      document.querySelectorAll(".role-view").forEach(el => el.classList.add("d-none"));
+      document.getElementById("view-" + role).classList.remove("d-none");
+      document.querySelectorAll(".navbar .btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadOrders();
+    }
+
+    async function loadMenu() {
+      const kw = document.getElementById("searchInput").value;
+      const res = await fetch(`/api/v1/menu?keyword=${encodeURIComponent(kw)}`);
+      const items = await res.json();
+      const container = document.getElementById("menuList");
+      if (!items.length) {
+        container.innerHTML = `<div class="col-12 text-muted">Không tìm thấy kết quả phù hợp.</div>`;
+        return;
+      }
+      container.innerHTML = items.map(item => {
+        const imgUrl = getFoodImage(item.name, item.image_url);
+        return `
+          <div class="col-md-6">
+            <div class="card h-100 shadow-sm border-0 overflow-hidden">
+              <img src="${imgUrl}" alt="${item.name}" class="card-img-top" style="height: 170px; object-fit: cover;" onerror="this.src='${FOOD_IMAGES.DEFAULT}'">
+              <div class="card-body d-flex flex-column justify-content-between">
+                <div>
+                  <span class="badge bg-warning text-dark mb-2">${item.restaurant_name}</span>
+                  <h6 class="fw-bold">${item.name}</h6>
+                  <p class="text-danger fw-bold mb-3">${item.price.toLocaleString()} VNĐ</p>
+                </div>
+                <button class="btn btn-sm btn-outline-dark w-100" onclick="addToCart('${item.id}', false)">+ Thêm vào giỏ</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function addToCart(foodId, forceReset) {
+      pendingFoodId = foodId;
+      const res = await fetch("/api/v1/cart/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customer_id: customerId, food_id: foodId, quantity: 1, force_reset_cart: forceReset })
+      });
+      if (res.status === 409) {
+        req9Modal.show();
+        return;
+      }
+      req9Modal.hide();
+      await loadCart();
+    }
+
+    function confirmResetCart() {
+      if (pendingFoodId) addToCart(pendingFoodId, true);
+    }
+
+    async function loadCart() {
+      const res = await fetch(`/api/v1/cart/${customerId}`);
+      const cart = await res.json();
+      const box = document.getElementById("cartItems");
+      if (!cart.items.length) {
+        box.innerHTML = "Giỏ hàng đang trống";
+        document.getElementById("cartTotal").innerText = "0 VNĐ";
+        return;
+      }
+      box.innerHTML = cart.items.map(i => {
+        const imgUrl = getFoodImage(i.food_name, i.image_url);
+        return `
+          <div class="d-flex align-items-center justify-content-between mb-2 pb-2 border-bottom">
+            <div class="d-flex align-items-center gap-2">
+              <img src="${imgUrl}" alt="${i.food_name}" class="rounded" style="width: 44px; height: 44px; object-fit: cover;" onerror="this.src='${FOOD_IMAGES.DEFAULT}'">
+              <div>
+                <div class="fw-semibold text-dark">${i.food_name}</div>
+                <div class="text-muted" style="font-size: 12px;">Số lượng: x${i.quantity}</div>
+              </div>
+            </div>
+            <span class="fw-bold text-danger">${(i.unit_price * i.quantity).toLocaleString()}đ</span>
+          </div>
+        `;
+      }).join("");
+      document.getElementById("cartTotal").innerText = (cart.total_amount + 15000).toLocaleString() + " VNĐ";
+    }
+
+    async function checkoutOrder() {
+      const address = document.getElementById("addressInput").value.trim();
+      const method = document.getElementById("paymentSelect").value;
+      const res = await fetch("/api/v1/orders/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customer_id: customerId, delivery_address: address, payment_method: method })
+      });
+      const data = await res.json();
+      if (!res.ok) return alert(data.detail);
+      alert("Đặt hàng thành công!");
+      await loadCart();
+      await loadOrders();
+    }
+
+    async function loadOrders() {
+      const res = await fetch("/api/v1/orders");
+      const orders = await res.json();
+
+      // Khách hàng
+      document.getElementById("customerOrders").innerHTML = orders.map(o => `
+        <div class="col-md-6">
+          <div class="card shadow-sm border-0 p-3">
+            <div class="d-flex justify-content-between">
+              <span class="fw-bold">Đơn #${o.order_id.slice(0, 8)}</span>
+              <span class="badge bg-primary">${o.status}</span>
+            </div>
+            <div class="small text-muted mt-1">Giao tới: ${o.delivery_address}</div>
+            <div class="small mt-1">Tổng tiền: <strong>${o.grand_total.toLocaleString()}đ</strong> (${o.payment_method} - ${o.payment_status})</div>
+            ${o.status === "PENDING" ? `<button class="btn btn-sm btn-outline-danger mt-2" onclick="cancelOrder('${o.order_id}', 'CUSTOMER')">Hủy đơn hàng</button>` : ""}
+          </div>
+        </div>
+      `).join("");
+
+      // Nhà hàng
+      document.getElementById("restaurantOrders").innerHTML = orders.map(o => `
+        <div class="col-md-6">
+          <div class="card shadow-sm border-0 p-3">
+            <div class="d-flex justify-content-between">
+              <span class="fw-bold">Đơn #${o.order_id.slice(0, 8)}</span>
+              <span class="badge bg-info text-dark">${o.status}</span>
+            </div>
+            <div class="small my-2">Tổng tiền: ${o.grand_total.toLocaleString()}đ | PTTT: ${o.payment_method}</div>
+            ${o.status === "PENDING" ? `
+              <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-success" onclick="acceptOrder('${o.order_id}')">Xác nhận & Điều phối tài xế</button>
+                <button class="btn btn-sm btn-danger" onclick="cancelOrder('${o.order_id}', 'RESTAURANT')">Từ chối (Hết món)</button>
+              </div>
+            ` : ""}
+          </div>
+        </div>
+      `).join("");
+
+      // Tài xế
+      document.getElementById("driverOrders").innerHTML = orders.map(o => `
+        <div class="col-md-6">
+          <div class="card shadow-sm border-0 p-3">
+            <div class="fw-bold">Chuyến giao #${o.order_id.slice(0, 8)} - Trạng thái: ${o.status}</div>
+            <div class="small text-muted my-1">Địa chỉ khách: ${o.delivery_address}</div>
+            <div class="small mb-2">Trạng thái điều phối: <strong>${o.assignment_status}</strong></div>
+            ${o.assignment_status === "OFFERED" ? `<button class="btn btn-sm btn-warning fw-bold" onclick="driverAccept('${o.assignment_id}')">NHẬN ĐƠN NGAY</button>` : ""}
+            ${o.status === "DELIVERING" ? `<button class="btn btn-sm btn-success fw-bold" onclick="completeOrder('${o.order_id}')">XÁC NHẬN ĐÃ GIAO HÀNG</button>` : ""}
+          </div>
+        </div>
+      `).join("");
+
+      // Admin
+      document.getElementById("adminOrders").innerHTML = `
+        <table class="table table-bordered table-sm align-middle mb-0">
+          <thead class="table-dark">
+            <tr><th>Mã Đơn</th><th>Tổng Tiền</th><th>PTTT</th><th>Trạng Thái Tiền</th><th>Trạng Thái Đơn</th></tr>
+          </thead>
+          <tbody>
+            ${orders.map(o => `
+              <tr>
+                <td>#${o.order_id.slice(0, 8)}</td>
+                <td>${o.grand_total.toLocaleString()}đ</td>
+                <td>${o.payment_method}</td>
+                <td><span class="badge ${o.payment_status === 'REFUND_PROCESSING' ? 'bg-danger' : 'bg-secondary'}">${o.payment_status}</span></td>
+                <td>${o.status}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    async function acceptOrder(id) {
+      await fetch(`/api/v1/orders/${id}/restaurant-accept`, { method: "POST" });
+      loadOrders();
+    }
+    async function cancelOrder(id, role) {
+      const res = await fetch(`/api/v1/orders/${id}/cancel?role=${role}`, { method: "POST" });
+      const data = await res.json();
+      alert(data.message || data.detail);
+      loadOrders();
+    }
+    async function driverAccept(assignId) {
+      await fetch(`/api/v1/dispatch/${assignId}/accept`, { method: "POST" });
+      loadOrders();
+    }
+    async function completeOrder(id) {
+      await fetch(`/api/v1/orders/${id}/complete`, { method: "POST" });
+      loadOrders();
+    }
+
+    initApp();
+  </script>
+</body>
+</html>
