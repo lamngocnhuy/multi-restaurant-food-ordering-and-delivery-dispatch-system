@@ -1,122 +1,200 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy.orm import Session
-from models.entities import User, SubOrder, DeliveryAssignment, Payment
 
-# ====== Cấu hình ======
-# Số giây chờ tài xế phản hồi. Demo để 5, khi nộp báo cáo để 30 (khớp DT-DRV-02)
+from models.entities import DeliveryAssignment, Payment, SubOrder, User
+
+
 DISPATCH_TIMEOUT_SECONDS = 30
-
-# Trạng thái đơn còn cần tìm tài xế
-ACTIVE_STATUSES = ["PREPARING", "READY"]
-
-# Trạng thái đơn mà tài xế được coi là đang bận
-BUSY_SUBORDER_STATUSES = ["PREPARING", "READY", "DELIVERING"]
+ACTIVE_STATUSES = ("PREPARING", "READY")
+BUSY_SUBORDER_STATUSES = ("PREPARING", "READY", "DELIVERING")
 
 
-# 1. Tìm danh sách tài xế Online, sẵn sàng và KHÔNG đang bận đơn khác
+def utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def get_available_drivers(db: Session):
-    busy_ids = [
-        row[0]
-        for row in db.query(DeliveryAssignment.driver_id)
+    busy_drivers = (
+        db.query(DeliveryAssignment.driver_id)
         .join(SubOrder, SubOrder.id == DeliveryAssignment.sub_order_id)
         .filter(
-            DeliveryAssignment.status == "ACCEPTED",
+            DeliveryAssignment.status.in_(("OFFERED", "ACCEPTED")),
             SubOrder.status.in_(BUSY_SUBORDER_STATUSES),
         )
-        .all()
-    ]
-
-    query = db.query(User).filter(
-        User.role == "DRIVER",
-        User.status == "ACTIVE",
-        User.is_online == True,
     )
-    # Chỉ loại trừ khi có tài xế bận (tránh NOT IN với danh sách rỗng)
-    if busy_ids:
-        query = query.filter(~User.id.in_(busy_ids))
 
-    return query.all() or []
+    return (
+        db.query(User)
+        .filter(
+            User.role == "DRIVER",
+            User.status == "ACTIVE",
+            User.is_online.is_(True),
+            ~User.id.in_(busy_drivers),
+        )
+        .order_by(User.id)
+        .all()
+    )
 
 
-# 2. Điều phối tài xế tự động, vòng lặp đếm ngược (ST-02)
-async def run_auto_dispatch_loop(sub_order_id: str, db_factory):
-    db: Session = db_factory()
-    try:
-        sub_order = db.query(SubOrder).filter(SubOrder.id == sub_order_id).first()
-        if not sub_order or sub_order.status not in ACTIVE_STATUSES:
-            return
+def get_or_create_offer(sub_order_id, attempted_drivers, db_factory):
+    with db_factory() as db:
+        sub_order = (
+            db.query(SubOrder)
+            .filter(SubOrder.id == sub_order_id)
+            .with_for_update()
+            .first()
+        )
+        if sub_order is None:
+            return None
 
-        sub_order.dispatch_status = "SEARCHING"
-        db.commit()
+        assignments = db.query(DeliveryAssignment).filter(
+            DeliveryAssignment.sub_order_id == sub_order_id
+        )
 
-        drivers = get_available_drivers(db)
-        if not drivers:
-            # DT-DRV-03: không có tài xế -> báo thất bại để giao diện hiện cảnh báo
-            sub_order.dispatch_status = "FAILED"
+        accepted = assignments.filter(
+            DeliveryAssignment.status.in_(("ACCEPTED", "COMPLETED"))
+        ).first()
+        if accepted is not None:
+            sub_order.dispatch_status = "ASSIGNED"
             db.commit()
-            print(f"[DISPATCH] Không có tài xế khả dụng cho đơn {sub_order_id}")
-            return
+            return None
 
-        for driver in drivers:
-            # Làm mới trạng thái đơn: nếu bị hủy giữa chừng thì dừng ngay
-            db.refresh(sub_order)
-            if sub_order.status not in ACTIVE_STATUSES:
-                print(f"[DISPATCH] Đơn {sub_order_id} không còn cần tài xế, dừng điều phối.")
-                return
+        if sub_order.status not in ACTIVE_STATUSES:
+            return None
 
-            # Đơn đã có tài xế nhận thì dừng
-            existing_accepted = db.query(DeliveryAssignment).filter(
-                DeliveryAssignment.sub_order_id == sub_order_id,
-                DeliveryAssignment.status == "ACCEPTED",
-            ).first()
-            if existing_accepted:
-                return
+        existing_offer = assignments.filter(
+            DeliveryAssignment.status == "OFFERED"
+        ).order_by(DeliveryAssignment.assigned_at).first()
+        if existing_offer is not None:
+            return existing_offer.id, existing_offer.driver_id
 
-            # Tạo đề nghị giao hàng gửi tới tài xế
+        for candidate in get_available_drivers(db):
+            if candidate.id in attempted_drivers:
+                continue
+
+            driver = (
+                db.query(User)
+                .filter(
+                    User.id == candidate.id,
+                    User.role == "DRIVER",
+                    User.status == "ACTIVE",
+                    User.is_online.is_(True),
+                )
+                .with_for_update()
+                .first()
+            )
+            if driver is None:
+                continue
+
+            busy = (
+                db.query(DeliveryAssignment.id)
+                .join(SubOrder, SubOrder.id == DeliveryAssignment.sub_order_id)
+                .filter(
+                    DeliveryAssignment.driver_id == driver.id,
+                    DeliveryAssignment.status.in_(("OFFERED", "ACCEPTED")),
+                    SubOrder.status.in_(BUSY_SUBORDER_STATUSES),
+                )
+                .first()
+            )
+            if busy is not None:
+                continue
+
             assignment = DeliveryAssignment(
-                sub_order_id=sub_order_id,
+                sub_order_id=sub_order.id,
                 driver_id=driver.id,
                 status="OFFERED",
+                assigned_at=utc_now(),
             )
+            sub_order.dispatch_status = "SEARCHING"
             db.add(assignment)
+            db.flush()
+            result = assignment.id, driver.id
             db.commit()
-            db.refresh(assignment)
-            print(f"[DISPATCH] Đã gửi đề nghị tới Tài xế {driver.full_name} (đợi phản hồi)...")
+            return result
 
-            # Chờ phản hồi, mỗi giây kiểm tra một lần
-            for _ in range(DISPATCH_TIMEOUT_SECONDS):
-                await asyncio.sleep(1)
-                db.refresh(assignment)
-                if assignment.status == "ACCEPTED":
-                    sub_order.dispatch_status = "ASSIGNED"
-                    db.commit()
-                    print(f"[DISPATCH] Tài xế {driver.full_name} ĐÃ NHẬN ĐƠN!")
-                    return
-                if assignment.status in ("REJECTED", "CANCELLED"):
-                    break  # Từ chối hoặc đơn bị hủy -> thoát vòng đếm
-
-            # Hết giờ mà chưa phản hồi -> TIMEOUT, chuyển tài xế kế tiếp
-            if assignment.status == "OFFERED":
-                assignment.status = "TIMEOUT"
-                db.commit()
-                print(f"[DISPATCH] Tài xế {driver.full_name} quá hạn phản hồi -> chuyển tài xế kế tiếp.")
-
-        # Đã hỏi hết tài xế mà không ai nhận -> báo thất bại (DT-DRV-04 dùng trạng thái này)
-        db.refresh(sub_order)
-        if sub_order.status in ACTIVE_STATUSES:
-            sub_order.dispatch_status = "FAILED"
-            db.commit()
-            print(f"[DISPATCH] Hết tài xế cho đơn {sub_order_id}.")
-    finally:
-        db.close()
-
-
-# 3. Tự động kích hoạt hoàn tiền nếu đơn thanh toán ONLINE bị hủy (ST-09)
-def trigger_refund_if_paid_online(db: Session, order_id: str):
-    payment = db.query(Payment).filter(Payment.order_id == order_id).first()
-    # Chỉ hoàn khi đã thanh toán thành công; nếu đã REFUND_PROCESSING thì bỏ qua
-    if payment and payment.method == "ONLINE" and payment.status == "SUCCESS":
-        payment.status = "REFUND_PROCESSING"
+        sub_order.dispatch_status = "FAILED"
         db.commit()
-        return True
-    return False
+        return None
+
+
+def check_offer(assignment_id, db_factory):
+    with db_factory() as db:
+        assignment = db.get(DeliveryAssignment, assignment_id)
+        if assignment is None:
+            return "MISSING", 0
+
+        if assignment.status != "OFFERED":
+            return assignment.status, 0
+
+        deadline = assignment.assigned_at + timedelta(seconds=DISPATCH_TIMEOUT_SECONDS)
+        remaining = (deadline - utc_now()).total_seconds()
+
+        if remaining > 0:
+            return "OFFERED", remaining
+
+        changed = db.query(DeliveryAssignment).filter(
+            DeliveryAssignment.id == assignment_id,
+            DeliveryAssignment.status == "OFFERED",
+        ).update(
+            {"status": "TIMEOUT"},
+            synchronize_session=False,
+        )
+        db.commit()
+
+        if changed:
+            return "TIMEOUT", 0
+
+        db.refresh(assignment)
+        return assignment.status, 0
+
+
+async def run_auto_dispatch_loop(sub_order_id: str, db_factory):
+    attempted_drivers = set()
+
+    while True:
+        offer = await asyncio.to_thread(
+            get_or_create_offer, sub_order_id, attempted_drivers, db_factory
+        )
+        if offer is None:
+            return
+
+        assignment_id, driver_id = offer
+        attempted_drivers.add(driver_id)
+
+        while True:
+            status, remaining = await asyncio.to_thread(
+                check_offer, assignment_id, db_factory
+            )
+
+            if status != "OFFERED":
+                break
+
+            await asyncio.sleep(min(1, remaining))
+
+        if status in ("REJECTED", "TIMEOUT", "MISSING", "ACCEPTED", "COMPLETED"):
+            # Đọc lại SubOrder để tìm ứng viên kế tiếp hoặc lưu ASSIGNED.
+            continue
+
+        # Ví dụ: đề nghị đã bị thu hồi khi đơn bị hủy.
+        return
+
+
+def trigger_refund_if_paid_online(db: Session, order_id: str):
+    payment = (
+        db.query(Payment)
+        .filter(
+            Payment.order_id == order_id,
+            Payment.method == "ONLINE",
+            Payment.status == "SUCCESS",
+        )
+        .with_for_update()
+        .first()
+    )
+
+    if payment is None:
+        return False
+
+    payment.status = "REFUND_PROCESSING"
+    return True

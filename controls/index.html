@@ -1,101 +1,175 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hệ Thống Đặt Món & Điều Phối Giao Hàng Đa Nhà Hàng</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Food Dispatch System</title>
+  <link rel="stylesheet" href="/static/forms.css">
+  <script src="/static/forms.js" defer></script>
+  <script src="/static/dashboards.js" defer></script>
+  <script src="/static/driver-availability.js" defer></script>
+  <script src="/static/admin-report.js" defer></script>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+  >
 </head>
 <body class="bg-light">
-  <!-- THANH ĐIỀU HƯỚNG 4 VAI TRÒ -->
-  <nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top shadow-sm">
-    <div class="container">
-      <a class="navbar-brand fw-bold text-warning" href="#">FOOD DISPATCH SYSTEM</a>
-      <div class="btn-group" role="group">
-        <button class="btn btn-outline-warning active" onclick="switchRole('CUSTOMER', this)">Khách Hàng</button>
-        <button class="btn btn-outline-warning" onclick="switchRole('RESTAURANT', this)">Bếp Nhà Hàng</button>
-        <button class="btn btn-outline-warning" onclick="switchRole('DRIVER', this)">Tài Xế</button>
-        <button class="btn btn-outline-warning" onclick="switchRole('ADMIN', this)">Admin</button>
+  <header class="bg-dark shadow-sm">
+    <nav class="container py-3 d-flex flex-wrap align-items-center justify-content-between gap-3"
+         aria-label="Màn hình nghiệp vụ">
+      <a class="text-warning fw-bold fs-5 text-decoration-none" href="#">
+        FOOD DISPATCH SYSTEM
+      </a>
+      <div id="sessionBar" class="d-none text-light">
+        <span id="accountName" class="me-2"></span>
+        <button id="logout" type="button" class="btn btn-outline-warning">Đăng xuất</button>
       </div>
-    </div>
-  </nav>
+    </nav>
+  </header>
 
-  <div class="container my-4">
-    <!-- 1. PHÂN HỆ KHÁCH HÀNG -->
-    <div id="view-CUSTOMER" class="role-view">
+  <main class="container my-4">
+    <div id="notice" class="alert d-none" role="status" aria-live="polite" tabindex="-1">
+      <span id="noticeText"></span>
+      <button type="button" id="retryInit" class="btn btn-sm btn-outline-dark ms-2 d-none">
+        Thử kết nối lại
+      </button>
+    </div>
+
+    <section id="authPanel" class="card mx-auto shadow-sm border-0" style="max-width: 440px;">
+      <div class="card-body p-4">
+        <h1 id="authTitle" class="h4">Đăng nhập</h1>
+        <p id="authError" class="text-danger" role="status"></p>
+        <form id="authForm">
+          <div id="nameField" class="mb-3 d-none">
+            <label for="authName" class="form-label">Họ tên</label>
+            <input id="authName" class="form-control" autocomplete="name" maxlength="120">
+          </div>
+          <div class="mb-3">
+            <label for="authEmail" class="form-label">Email</label>
+            <input id="authEmail" type="email" class="form-control" autocomplete="username" required maxlength="254">
+          </div>
+          <div class="mb-3">
+            <label for="authPassword" class="form-label">Mật khẩu</label>
+            <input id="authPassword" type="password" class="form-control"
+                   autocomplete="current-password" required maxlength="128">
+          </div>
+          <button id="authSubmit" type="submit" class="btn btn-dark w-100">Đăng nhập</button>
+          <button id="authToggle" type="button" class="btn btn-link px-0">Đăng ký tài khoản khách hàng</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="view-CUSTOMER" class="role-view d-none" aria-labelledby="menuHeading">
       <div class="row g-4">
         <div class="col-lg-8">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h4 class="fw-bold mb-0">Thực Đơn Đa Nhà Hàng</h4>
-            <input type="text" id="searchInput" class="form-control w-50" placeholder="Tìm món (VD: Phở, Cơm)..." onkeyup="loadMenu()" />
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h1 id="menuHeading" class="h4 fw-bold mb-0">Thực đơn đa nhà hàng</h1>
+            <div class="flex-grow-1" style="max-width: 360px;">
+              <label class="visually-hidden" for="searchInput">Tìm món</label>
+              <input id="searchInput" type="search" class="form-control"
+                     placeholder="Tìm món (VD: Phở, Cơm)…" disabled>
+            </div>
           </div>
-          <div id="menuList" class="row g-3"></div>
+          <div id="menuList" class="row g-3">
+            <p class="text-muted" role="status">Đang kết nối…</p>
+          </div>
         </div>
 
         <div class="col-lg-4">
-          <div class="card shadow-sm border-0">
-            <div class="card-header bg-warning fw-bold">Giỏ Hàng Của Bạn (Quy tắc REQ-9)</div>
+          <section class="card shadow-sm border-0" aria-labelledby="cartHeading">
+            <h2 id="cartHeading" class="card-header bg-warning h6 fw-bold mb-0">
+              Giỏ hàng của bạn
+            </h2>
             <div class="card-body">
-              <div id="cartItems" class="mb-3 small text-muted">Giỏ hàng đang trống</div>
-              <hr />
-              <div class="d-flex justify-content-between fw-bold mb-3">
-                <span>Tổng cộng (gồm 15k ship):</span>
-                <span id="cartTotal" class="text-danger">0 VNĐ</span>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small fw-bold">Địa chỉ giao hàng:</label>
-                <input type="text" id="addressInput" class="form-control form-control-sm" value="19 Nguyễn Hữu Thọ, Quận 7" />
-              </div>
-              <div class="mb-3">
-                <label class="form-label small fw-bold">Phương thức thanh toán:</label>
-                <select id="paymentSelect" class="form-select form-select-sm">
-                  <option value="COD">Tiền mặt khi nhận hàng (COD)</option>
-                  <option value="ONLINE">Chuyển khoản trực tuyến (ONLINE)</option>
-                </select>
-              </div>
-              <button class="btn btn-dark w-100 fw-bold" onclick="checkoutOrder()">ĐẶT HÀNG NGAY</button>
+              <div id="cartItems" class="mb-3 small">Đang tải giỏ hàng…</div>
+              <dl class="mb-3" aria-live="polite">
+                <div class="d-flex justify-content-between gap-2">
+                  <dt class="fw-normal">Tiền món</dt>
+                  <dd id="cartSubtotal" class="mb-1">0 VNĐ</dd>
+                </div>
+                <div class="d-flex justify-content-between gap-2">
+                  <dt class="fw-normal">Phí giao hàng</dt>
+                  <dd id="cartDeliveryFee" class="mb-1">0 VNĐ</dd>
+                </div>
+                <div class="d-flex justify-content-between gap-2 border-top mt-2 pt-2">
+                  <dt>Tổng thanh toán</dt>
+                  <dd id="cartTotal" class="text-danger fw-bold mb-0">0 VNĐ</dd>
+                </div>
+              </dl>
+
+              <form id="checkoutForm">
+                <div class="mb-2">
+                  <label for="addressInput" class="form-label small fw-bold">Địa chỉ giao hàng</label>
+                  <input id="addressInput" class="form-control" autocomplete="street-address"
+                         value="19 Nguyễn Hữu Thọ, Quận 7" required>
+                </div>
+                <div class="mb-3">
+                  <label for="paymentSelect" class="form-label small fw-bold">Phương thức thanh toán</label>
+                  <select id="paymentSelect" class="form-select">
+                    <option value="COD">Tiền mặt khi nhận hàng (COD)</option>
+                    <option value="ONLINE">Chuyển khoản trực tuyến (ONLINE)</option>
+                  </select>
+                </div>
+                <button id="checkoutButton" type="submit" class="btn btn-dark w-100 fw-bold" disabled>
+                  Đặt hàng ngay
+                </button>
+              </form>
             </div>
-          </div>
+          </section>
         </div>
       </div>
 
-      <h5 class="fw-bold mt-5 mb-3">Theo Dõi Đơn Hàng Của Tôi</h5>
-      <div id="customerOrders" class="row g-3"></div>
-    </div>
+      <section class="mt-5" aria-labelledby="customerOrdersHeading">
+        <h2 id="customerOrdersHeading" class="h5 fw-bold" tabindex="-1">Theo dõi đơn hàng của tôi</h2>
+        <p id="checkoutNotice" class="alert d-none" role="status" aria-live="polite"></p>
+        <div id="customerOrders" class="row g-3 order-list"></div>
+      </section>
+    </section>
 
-    <!-- 2. PHÂN HỆ BẾP NHÀ HÀNG -->
-    <div id="view-RESTAURANT" class="role-view d-none">
-      <h4 class="fw-bold mb-3">Màn Hình Bếp - Tiếp Nhận & Xử Lý Đơn</h4>
-      <div id="restaurantOrders" class="row g-3"></div>
-    </div>
+    <section id="view-RESTAURANT" class="role-view d-none" aria-labelledby="restaurantHeading">
+      <h1 id="restaurantHeading" class="h4 fw-bold mb-3">Bếp nhà hàng · Xử lý đơn</h1>
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <h2 class="h5 fw-bold mb-0">Đơn của nhà hàng</h2>
+        <div>
+          <label for="restaurantOrderFilter" class="visually-hidden">Lọc đơn theo trạng thái</label>
+          <select id="restaurantOrderFilter" class="form-select form-select-sm">
+            <option value="ACTIVE">Đang xử lý</option>
+            <option value="PENDING">Chờ xác nhận</option>
+            <option value="COMPLETED">Đã hoàn tất</option>
+            <option value="CANCELLED">Đã hủy</option>
+            <option value="ALL">Tất cả đơn</option>
+          </select>
+        </div>
+      </div>
+      <div id="restaurantOrders" class="row g-3 order-list"></div>
+    </section>
 
-    <!-- 3. PHÂN HỆ TÀI XẾ -->
-    <div id="view-DRIVER" class="role-view d-none">
-      <h4 class="fw-bold mb-3">Ứng Dụng Tài Xế - Nhận Đơn Tự Động (Timeout 30s)</h4>
-      <div id="driverOrders" class="row g-3"></div>
-    </div>
+    <section id="view-DRIVER" class="role-view d-none" aria-labelledby="driverHeading">
+      <h1 id="driverHeading" class="h4 fw-bold mb-3">Tài xế · Chuyến giao hàng</h1>
+      <div id="driverOrders" class="row g-3 order-list"></div>
+    </section>
 
-    <!-- 4. PHÂN HỆ ADMIN -->
-    <div id="view-ADMIN" class="role-view d-none">
-      <h4 class="fw-bold mb-3">Admin Dashboard - Giám Sát & Đối Soát Hoàn Tiền (ST-09)</h4>
-      <div id="adminOrders" class="table-responsive bg-white p-3 rounded shadow-sm"></div>
-    </div>
-  </div>
+    <section id="view-ADMIN" class="role-view d-none" aria-labelledby="adminHeading">
+      <h1 id="adminHeading" class="h4 fw-bold mb-3">Admin · Đơn hàng và thanh toán</h1>
+      <div id="adminOrders" class="table-responsive order-list"></div>
+    </section>
+  </main>
 
-  <!-- MODAL CẢNH BÁO ĐỔI NHÀ HÀNG (REQ-9) -->
-  <div class="modal fade" id="req9Modal" tabindex="-1">
+  <div id="req9Modal" class="modal fade" tabindex="-1" aria-labelledby="req9Title">
     <div class="modal-dialog">
       <div class="modal-content">
         <div class="modal-header bg-warning">
-          <h5 class="modal-title fw-bold">Cảnh báo đổi nhà hàng (REQ-9)</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          <h2 id="req9Title" class="modal-title h5">Đổi nhà hàng?</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button>
         </div>
         <div class="modal-body">
-          Giỏ hàng của bạn đang chứa món ăn từ nhà hàng khác. Mỗi đơn hàng chỉ hỗ trợ đặt từ <strong>01 nhà hàng duy nhất</strong>. Bạn có muốn xóa giỏ cũ để thêm món mới không?
+          Mỗi giỏ chỉ chứa món của một nhà hàng. Bạn có muốn xóa giỏ hiện tại để thêm món mới?
+          <p id="resetError" class="text-danger d-none mt-3 mb-0" role="alert"></p>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Giữ giỏ cũ</button>
-          <button type="button" class="btn btn-danger" onclick="confirmResetCart()">Xóa giỏ cũ & Thêm mới</button>
+          <button id="confirmReset" type="button" class="btn btn-danger">Xóa giỏ cũ và thêm món</button>
         </div>
       </div>
     </div>
@@ -103,226 +177,724 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // =========================================================================
-    // KHU VỰC CẤU HÌNH ẢNH MÓN ĂN TRONG THƯ MỤC asset/
-    // =========================================================================
-    const FOOD_IMAGES = {
-      "Phở Bò Tái Nạm": "/static/phobo.png",
-      "Phở Đặc Biệt Bát Đá": "/static/phobatda.jpg",
-      "Cơm Tấm Sườn Cốt Lết": "/static/comsuon.jpg",
-      "Cơm Tấm Sườn Bì Chả Trứng": "/static/comdacbiet.jpg",
-      "DEFAULT": "https://placehold.co/600x400?text=Mon+An"
+    "use strict";
+
+    const byId = id => document.getElementById(id);
+    const money = new Intl.NumberFormat("vi-VN");
+    const formatMoney = amount => money.format(amount) + " VNĐ";
+    const DELIVERY_FEE = 15000;
+    const FOOD_IMAGES = new Map([
+      ["Phở Bò Tái Nạm", "/static/phobo.png"],
+      ["Phở Đặc Biệt Bát Đá", "/static/phobatda.jpg"],
+      ["Cơm Tấm Sườn Cốt Lết", "/static/comsuon.jpg"],
+      ["Cơm Tấm Sườn Bì Chả Trứng", "/static/comdacbiet.jpg"]
+    ]);
+    const FALLBACK_IMAGE = "https://placehold.co/600x400?text=Mon+An";
+
+    const orderLabels = {
+      PENDING: "Chờ xác nhận",
+      CONFIRMED: "Đã xác nhận",
+      PREPARING: "Đang chế biến",
+      READY: "Sẵn sàng giao",
+      DELIVERING: "Đang giao",
+      COMPLETED: "Đã hoàn tất",
+      DELIVERED: "Đã giao",
+      CANCELED: "Đã hủy",
+      CANCELLED: "Đã hủy"
     };
 
-    function getFoodImage(foodName, apiImageUrl) {
-      return FOOD_IMAGES[foodName] || apiImageUrl || FOOD_IMAGES["DEFAULT"];
-    }
-    // =========================================================================
+    const paymentLabels = {
+      COD: "COD",
+      ONLINE: "Chuyển khoản",
+      PENDING: "Chờ thanh toán",
+      UNPAID: "Chưa thanh toán",
+      PAID: "Đã thanh toán",
+      SUCCESS: "Đã thanh toán",
+      CANCELLED: "Đã hủy thanh toán",
+      FAILED: "Thanh toán thất bại",
+      REFUND_PROCESSING: "Đang xử lý hoàn tiền",
+      REFUNDED: "Đã hoàn tiền"
+    };
+
+    const dispatchLabels = {
+      SEARCHING: "Đang tìm tài xế",
+      OFFERED: "Đang mời nhận chuyến",
+      ACCEPTED: "Tài xế đã nhận",
+      REJECTED: "Tài xế từ chối",
+      EXPIRED: "Đã hết hạn",
+      TIMEOUT: "Đã hết hạn",
+      FAILED: "Chưa tìm được tài xế",
+      ASSIGNED: "Đã phân công tài xế"
+    };
 
     let customerId = "";
+    let currentUser;
+    let registering = false;
+    const tokenKey = "food-dispatch-token";
+    let initializing = false;
+    let menuRequest;
+    let searchTimer;
+    let cartBusy = false;
+    let cartHasItems = false;
+    let checkoutBusy = false;
     let pendingFoodId = null;
-    const req9Modal = new bootstrap.Modal(document.getElementById("req9Modal"));
+    let ordersRequest;
+    let orderActionBusy = false;
 
-    async function initApp() {
-      const res = await fetch("/api/v1/seed", { method: "POST" });
-      const data = await res.json();
-      customerId = data.customer_id;
-      await loadMenu();
-      await loadCart();
-      await loadOrders();
-      setInterval(loadOrders, 3000);
+    const modalElement = byId("req9Modal");
+    const resetModal = new bootstrap.Modal(modalElement);
+    const orderLists = document.querySelectorAll(".order-list");
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, character => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[character]);
     }
 
-    function switchRole(role, btn) {
-      document.querySelectorAll(".role-view").forEach(el => el.classList.add("d-none"));
-      document.getElementById("view-" + role).classList.remove("d-none");
-      document.querySelectorAll(".navbar .btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      loadOrders();
+    function label(labels, code) {
+      return Object.hasOwn(labels, code) ? labels[code] : (code || "—");
+    }
+
+    function showNotice(message, type = "success") {
+      byId("noticeText").textContent = message;
+      byId("notice").className = `alert alert-${type}`;
+    }
+
+    function showCheckoutNotice(message, type = "success") {
+      const notice = byId("checkoutNotice");
+      notice.textContent = message;
+      notice.className = `alert alert-${type}`;
+    }
+
+    async function api(path, options = {}) {
+      const token = sessionStorage.getItem(tokenKey);
+      const headers = new Headers(options.headers);
+      const isCredentialForm = path === "/api/v1/auth/login" || path === "/api/v1/auth/register";
+      if (token && !isCredentialForm) headers.set("Authorization", "Bearer " + token);
+
+      const response = await fetch(path, { ...options, headers });
+      if (response.status === 401 && token && !isCredentialForm) {
+        sessionStorage.removeItem(tokenKey);
+        location.reload();
+      }
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const detail = typeof data?.detail === "string" ? data.detail : data?.message;
+        const error = new Error(detail || `Máy chủ trả về HTTP ${response.status}.`);
+        error.status = response.status;
+        throw error;
+      }
+
+      return data;
+    }
+
+    function postJson(path, payload) {
+      return api(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    function setFoodImage(image, name, url) {
+      image.alt = name || "Món ăn";
+      image.addEventListener("error", () => {
+        image.src = FALLBACK_IMAGE;
+      }, { once: true });
+      image.src = FOOD_IMAGES.get(name) || url || FALLBACK_IMAGE;
+    }
+
+    function syncControls() {
+      const blocked = !customerId || cartBusy || checkoutBusy || pendingFoodId !== null;
+      byId("checkoutButton").disabled = blocked || !cartHasItems;
+      byId("checkoutButton").textContent = checkoutBusy ? "Đang gửi đơn…" : "Đặt hàng ngay";
+      byId("confirmReset").disabled = cartBusy;
+      byId("cartItems").querySelectorAll("[data-cart-quantity]").forEach(button => {
+        button.disabled = blocked || button.dataset.limit === "true";
+      });
+      byId("menuList").querySelectorAll("[data-add]").forEach(button => {
+        button.disabled = blocked;
+      });
+      document.querySelectorAll(".order-list [data-action]").forEach(button => {
+        button.disabled = orderActionBusy;
+      });
+    }
+
+    async function initialize() {
+      if (initializing || currentUser || !sessionStorage.getItem(tokenKey)) return;
+      initializing = true;
+      try {
+        const user = await api("/api/v1/auth/me");
+        const view = byId("view-" + user?.role);
+        if (!view || !view.classList.contains("role-view")) {
+          throw new Error("Vai trò tài khoản không hợp lệ.");
+        }
+
+        currentUser = user;
+        byId("authPanel").classList.add("d-none");
+        byId("sessionBar").classList.remove("d-none");
+        byId("accountName").textContent = user.full_name;
+        view.classList.remove("d-none");
+
+        if (user.role === "CUSTOMER") {
+          customerId = user.id;
+          byId("searchInput").disabled = false;
+          await Promise.all([loadMenu(), loadCart()]);
+        }
+        void loadOrders();
+        setInterval(loadOrders, 3000);
+      } catch (error) {
+        byId("authError").textContent = error.message;
+      } finally {
+        initializing = false;
+        syncControls();
+      }
+    }
+
+    function toggleAuth() {
+      registering = !registering;
+      byId("nameField").classList.toggle("d-none", !registering);
+      byId("authName").required = registering;
+      byId("authPassword").minLength = registering ? 10 : 1;
+      byId("authPassword").autocomplete = registering ? "new-password" : "current-password";
+      byId("authTitle").textContent = registering ? "Đăng ký" : "Đăng nhập";
+      byId("authSubmit").textContent = byId("authTitle").textContent;
+      byId("authToggle").textContent = registering ? "Về đăng nhập" : "Đăng ký tài khoản khách hàng";
+      byId("authError").textContent = "";
+    }
+
+    async function submitAuth(event) {
+      event.preventDefault();
+      byId("authSubmit").disabled = true;
+      byId("authToggle").disabled = true;
+      byId("authError").textContent = "";
+
+      try {
+        const credentials = {
+          email: byId("authEmail").value.trim(),
+          password: byId("authPassword").value
+        };
+        if (registering) {
+          await postJson("/api/v1/auth/register", {
+            ...credentials,
+            full_name: byId("authName").value.trim()
+          });
+          toggleAuth();
+        }
+        const session = await postJson("/api/v1/auth/login", credentials);
+        sessionStorage.setItem(tokenKey, session.access_token);
+        byId("authPassword").value = "";
+        await initialize();
+      } catch (error) {
+        byId("authError").textContent = error.message;
+      } finally {
+        byId("authSubmit").disabled = false;
+        byId("authToggle").disabled = false;
+      }
     }
 
     async function loadMenu() {
-      const kw = document.getElementById("searchInput").value;
-      const res = await fetch(`/api/v1/menu?keyword=${encodeURIComponent(kw)}`);
-      const items = await res.json();
-      const container = document.getElementById("menuList");
-      if (!items.length) {
-        container.innerHTML = `<div class="col-12 text-muted">Không tìm thấy kết quả phù hợp.</div>`;
-        return;
-      }
-      container.innerHTML = items.map(item => {
-        const imgUrl = getFoodImage(item.name, item.image_url);
-        return `
-          <div class="col-md-6">
-            <div class="card h-100 shadow-sm border-0 overflow-hidden">
-              <img src="${imgUrl}" alt="${item.name}" class="card-img-top" style="height: 170px; object-fit: cover;" onerror="this.src='${FOOD_IMAGES.DEFAULT}'">
-              <div class="card-body d-flex flex-column justify-content-between">
-                <div>
-                  <span class="badge bg-warning text-dark mb-2">${item.restaurant_name}</span>
-                  <h6 class="fw-bold">${item.name}</h6>
-                  <p class="text-danger fw-bold mb-3">${item.price.toLocaleString()} VNĐ</p>
-                </div>
-                <button class="btn btn-sm btn-outline-dark w-100" onclick="addToCart('${item.id}', false)">+ Thêm vào giỏ</button>
+      menuRequest?.abort();
+      const request = new AbortController();
+      menuRequest = request;
+
+      const box = byId("menuList");
+      const keyword = byId("searchInput").value.trim();
+      box.innerHTML = '<p class="text-muted" role="status">Đang tải thực đơn…</p>';
+
+      try {
+        const items = await api(`/api/v1/menu?keyword=${encodeURIComponent(keyword)}`, {
+          signal: request.signal
+        });
+        if (request.signal.aborted) return;
+        if (!Array.isArray(items)) throw new Error("Dữ liệu thực đơn không hợp lệ.");
+
+        if (!items.length) {
+          box.innerHTML = '<p class="text-muted" role="status">Không tìm thấy món phù hợp.</p>';
+          return;
+        }
+
+        box.replaceChildren(...items.map(item => {
+          const card = document.createElement("div");
+          card.className = "col-md-6";
+          card.innerHTML = `
+            <article class="card h-100 shadow-sm border-0 overflow-hidden">
+              <img class="card-img-top" style="height: 170px; object-fit: cover;">
+              <div class="card-body d-flex flex-column">
+                <div><span class="badge bg-warning text-dark mb-2">${escapeHtml(item.restaurant_name)}</span></div>
+                <h2 class="h6 fw-bold">${escapeHtml(item.name)}</h2>
+                <p class="text-danger fw-bold">${formatMoney(item.price)}</p>
+                <button type="button" data-add class="btn btn-sm btn-outline-dark mt-auto">
+                  + Thêm vào giỏ
+                </button>
               </div>
-            </div>
+            </article>
+          `;
+          setFoodImage(card.querySelector("img"), item.name, item.image_url);
+          card.querySelector("button").addEventListener("click", () => addToCart(item.id));
+          return card;
+        }));
+        syncControls();
+      } catch (error) {
+        if (request.signal.aborted) return;
+        box.innerHTML = `
+          <div>
+            <p class="text-danger mb-2" role="alert">Không tải được thực đơn.</p>
+            <button type="button" class="btn btn-sm btn-outline-dark">Thử lại</button>
           </div>
         `;
-      }).join("");
-    }
-
-    async function addToCart(foodId, forceReset) {
-      pendingFoodId = foodId;
-      const res = await fetch("/api/v1/cart/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customer_id: customerId, food_id: foodId, quantity: 1, force_reset_cart: forceReset })
-      });
-      if (res.status === 409) {
-        req9Modal.show();
-        return;
+        box.querySelector("button").addEventListener("click", loadMenu);
       }
-      req9Modal.hide();
-      await loadCart();
     }
 
-    function confirmResetCart() {
-      if (pendingFoodId) addToCart(pendingFoodId, true);
+    function updateTotals(subtotal, fee) {
+      byId("cartSubtotal").textContent = formatMoney(subtotal);
+      byId("cartDeliveryFee").textContent = formatMoney(fee);
+      byId("cartTotal").textContent = formatMoney(subtotal + fee);
     }
 
     async function loadCart() {
-      const res = await fetch(`/api/v1/cart/${customerId}`);
-      const cart = await res.json();
-      const box = document.getElementById("cartItems");
-      if (!cart.items.length) {
-        box.innerHTML = "Giỏ hàng đang trống";
-        document.getElementById("cartTotal").innerText = "0 VNĐ";
+      const box = byId("cartItems");
+      cartHasItems = false;
+      syncControls();
+
+      try {
+        const cart = await api(`/api/v1/cart/${encodeURIComponent(customerId)}`);
+        if (!Array.isArray(cart?.items)) throw new Error("Dữ liệu giỏ hàng không hợp lệ.");
+
+        if (!cart.items.length) {
+          box.textContent = "Giỏ hàng đang trống";
+          updateTotals(0, 0);
+          return;
+        }
+
+        const subtotal = Number(cart.total_amount);
+        if (!Number.isFinite(subtotal)) throw new Error("Tiền món không hợp lệ.");
+
+        box.replaceChildren(...cart.items.map(item => {
+          const row = document.createElement("div");
+          row.className = "d-flex align-items-center justify-content-between gap-2 mb-2 pb-2 border-bottom";
+          row.innerHTML = `
+            <div class="d-flex align-items-center gap-2">
+              <img class="rounded" style="width: 44px; height: 44px; object-fit: cover;">
+              <div>
+                <div class="fw-semibold">${escapeHtml(item.food_name)}</div>
+                <div class="text-muted">Số lượng ×${escapeHtml(item.quantity)}</div>
+              </div>
+            </div>
+            <span class="fw-bold text-danger text-nowrap">${formatMoney(item.unit_price * item.quantity)}</span>
+          `;
+          setFoodImage(row.querySelector("img"), item.food_name, item.image_url);
+          const controls = document.createElement("div");
+          controls.className = "d-flex flex-wrap gap-1 mt-2";
+          controls.setAttribute("role", "group");
+          controls.setAttribute("aria-label", "Chỉnh số lượng " + item.food_name);
+
+          const quantity = Number(item.quantity);
+          const actions = [
+            { text: "−", label: "Giảm số lượng", quantity: quantity - 1, limited: quantity <= 1 },
+            { text: "+", label: "Tăng số lượng", quantity: quantity + 1, limited: quantity >= 99 },
+            { text: "Xóa", label: "Xóa món", quantity: 0, limited: false }
+          ];
+
+          for (const action of actions) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = action.quantity === 0 && action.text === "Xóa"
+              ? "btn btn-sm btn-outline-danger"
+              : "btn btn-sm btn-outline-secondary";
+            button.textContent = action.text;
+            button.setAttribute("aria-label", action.label + " " + item.food_name);
+            button.dataset.cartQuantity = String(action.quantity);
+            button.dataset.limit = String(action.limited);
+            controls.append(button);
+          }
+
+          controls.dataset.cartItemId = item.id;
+          const content = document.createElement("div");
+          content.append(row, controls);
+          content.className = "mb-3";
+          return content;
+        }));
+        updateTotals(subtotal, DELIVERY_FEE);
+        cartHasItems = true;
+      } catch (error) {
+        box.innerHTML = `
+          <p class="text-danger mb-2" role="alert">Không tải được giỏ hàng.</p>
+          <button type="button" class="btn btn-sm btn-outline-dark">Thử lại</button>
+        `;
+        box.querySelector("button").addEventListener("click", async event => {
+          event.currentTarget.disabled = true;
+          await loadCart();
+        });
+        for (const id of ["cartSubtotal", "cartDeliveryFee", "cartTotal"]) {
+          byId(id).textContent = "—";
+        }
+      } finally {
+        syncControls();
+      }
+    }
+
+    async function addToCart(foodId, forceReset = false) {
+      if (!customerId || cartBusy || checkoutBusy || (!forceReset && pendingFoodId !== null)) return;
+
+      cartBusy = true;
+      byId("resetError").classList.add("d-none");
+      syncControls();
+
+      try {
+        await postJson("/api/v1/cart/items", {
+          customer_id: customerId,
+          food_id: foodId,
+          quantity: 1,
+          force_reset_cart: forceReset
+        });
+        if (forceReset) {
+          byId("confirmReset").dataset.allowClose = "true";
+          resetModal.hide();
+          delete byId("confirmReset").dataset.allowClose;
+        }
+        await loadCart();
+      } catch (error) {
+        if (error.status === 409 && !forceReset) {
+          pendingFoodId = foodId;
+          resetModal.show();
+        } else if (forceReset) {
+          byId("resetError").textContent = error.message;
+          byId("resetError").classList.remove("d-none");
+          await loadCart();
+        } else {
+          showNotice(`Chưa cập nhật được giỏ hàng. ${error.message}`, "danger");
+          await loadCart();
+        }
+      } finally {
+        cartBusy = false;
+        syncControls();
+      }
+    }
+
+    async function checkout(event) {
+      event.preventDefault();
+      if (!cartHasItems || cartBusy || checkoutBusy || pendingFoodId !== null) return;
+
+      const input = byId("addressInput");
+      const address = input.value.trim();
+      if (!address) {
+        input.setCustomValidity("Vui lòng nhập địa chỉ giao hàng.");
+        input.reportValidity();
         return;
       }
-      box.innerHTML = cart.items.map(i => {
-        const imgUrl = getFoodImage(i.food_name, i.image_url);
-        return `
-          <div class="d-flex align-items-center justify-content-between mb-2 pb-2 border-bottom">
-            <div class="d-flex align-items-center gap-2">
-              <img src="${imgUrl}" alt="${i.food_name}" class="rounded" style="width: 44px; height: 44px; object-fit: cover;" onerror="this.src='${FOOD_IMAGES.DEFAULT}'">
-              <div>
-                <div class="fw-semibold text-dark">${i.food_name}</div>
-                <div class="text-muted" style="font-size: 12px;">Số lượng: x${i.quantity}</div>
-              </div>
-            </div>
-            <span class="fw-bold text-danger">${(i.unit_price * i.quantity).toLocaleString()}đ</span>
-          </div>
-        `;
-      }).join("");
-      document.getElementById("cartTotal").innerText = (cart.total_amount + 15000).toLocaleString() + " VNĐ";
+
+      checkoutBusy = true;
+      syncControls();
+      byId("checkoutNotice").classList.add("d-none");
+
+      try {
+        await postJson("/api/v1/orders/checkout", {
+          customer_id: customerId,
+          delivery_address: address,
+          payment_method: byId("paymentSelect").value
+        });
+        showCheckoutNotice("Đặt hàng thành công. Bạn có thể xem trạng thái đơn bên dưới.");
+        byId("customerOrdersHeading").focus();
+        await refreshAfterChange();
+        await loadCart();
+      } catch (error) {
+        const message = error.status
+          ? error.message
+          : "Chưa xác nhận được kết quả. Kiểm tra danh sách đơn trước khi đặt lại.";
+        showNotice(message, "danger");
+        byId("notice").focus();
+        await Promise.all([loadCart(), refreshAfterChange()]);
+      } finally {
+        checkoutBusy = false;
+        syncControls();
+      }
     }
 
-    async function checkoutOrder() {
-      const address = document.getElementById("addressInput").value.trim();
-      const method = document.getElementById("paymentSelect").value;
-      const res = await fetch("/api/v1/orders/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customer_id: customerId, delivery_address: address, payment_method: method })
+    function orderButton(action, id, text, style) {
+      return `<button type="button" class="btn btn-sm ${style}"
+                data-action="${action}" data-id="${escapeHtml(id)}">${text}</button>`;
+    }
+
+    function orderCard(order, details, buttons = "") {
+      return `
+        <div class="col-md-6">
+          <article class="card shadow-sm border-0 p-3 h-100">
+            <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+              <strong>Đơn #${escapeHtml(String(order.order_id).slice(0, 8))}</strong>
+              <span class="badge text-bg-primary">${escapeHtml(label(orderLabels, order.status))}</span>
+            </div>
+            ${details}
+            ${buttons ? `<div class="d-flex flex-wrap gap-2 mt-2">${buttons}</div>` : ""}
+          </article>
+        </div>
+      `;
+    }
+
+    function paymentSummary(order) {
+      return `${escapeHtml(label(paymentLabels, order.payment_method))}
+        · ${escapeHtml(label(paymentLabels, order.payment_status))}`;
+    }
+
+    let lastOrders = [];
+
+    function renderOrderItems(items) {
+      if (!Array.isArray(items) || items.length === 0) {
+        return '<p class="small text-muted mb-0 mt-2">Chưa có chi tiết món cho đơn này.</p>';
+      }
+
+      return `
+        <ul class="list-group list-group-flush small mb-2 mt-2">
+          ${items.map(item => `
+            <li class="list-group-item px-0 d-flex justify-content-between gap-2">
+              <span><strong>${escapeHtml(item.quantity)} ×</strong> ${escapeHtml(item.name)}</span>
+              <span class="text-nowrap">${formatMoney(item.line_total)}</span>
+            </li>
+          `).join("")}
+        </ul>
+      `;
+    }
+
+    function renderOrders(orders) {
+      lastOrders = orders;
+      const filter = byId("restaurantOrderFilter").value;
+      const kitchenOrders = orders.filter(order => {
+        if (filter === "ALL") return true;
+        if (filter === "ACTIVE") {
+          return ["PENDING", "PREPARING", "READY", "DELIVERING"].includes(order.status);
+        }
+        return order.status === filter;
       });
-      const data = await res.json();
-      if (!res.ok) return alert(data.detail);
-      alert("Đặt hàng thành công!");
-      await loadCart();
-      await loadOrders();
-    }
+      const empty = '<p class="text-muted">Chưa có đơn hàng.</p>';
+      const setContent = (id, html) => {
+        const list = byId(id);
+        if (list.dataset.rendered === html) return;
+        list.innerHTML = html;
+        list.dataset.rendered = html;
+      };
 
-    async function loadOrders() {
-      const res = await fetch("/api/v1/orders");
-      const orders = await res.json();
-
-      // Khách hàng
-      document.getElementById("customerOrders").innerHTML = orders.map(o => `
-        <div class="col-md-6">
-          <div class="card shadow-sm border-0 p-3">
-            <div class="d-flex justify-content-between">
-              <span class="fw-bold">Đơn #${o.order_id.slice(0, 8)}</span>
-              <span class="badge bg-primary">${o.status}</span>
-            </div>
-            <div class="small text-muted mt-1">Giao tới: ${o.delivery_address}</div>
-            <div class="small mt-1">Tổng tiền: <strong>${o.grand_total.toLocaleString()}đ</strong> (${o.payment_method} - ${o.payment_status})</div>
-            ${o.status === "PENDING" ? `<button class="btn btn-sm btn-outline-danger mt-2" onclick="cancelOrder('${o.order_id}', 'CUSTOMER')">Hủy đơn hàng</button>` : ""}
+      setContent("customerOrders", orders.map(order => orderCard(order, `
+        <div class="small text-break">Giao tới: ${escapeHtml(order.delivery_address)}</div>
+        ${renderOrderItems(order.items)}
+        <div class="small mt-1"><strong>${formatMoney(order.grand_total)}</strong> · ${paymentSummary(order)}</div>
+        ${order.dispatch_status ? `
+          <div class="small mt-1">
+            Điều phối: ${escapeHtml(label(dispatchLabels, order.dispatch_status))}
           </div>
-        </div>
-      `).join("");
+        ` : ""}
+      `, order.status === "PENDING"
+        ? (order.payment_method === "ONLINE" && order.payment_status === "PENDING"
+            ? orderButton("confirm-payment", order.order_id, "Xác nhận thanh toán mô phỏng", "btn-success")
+            : "")
+          + orderButton("customer-cancel", order.order_id, "Hủy đơn", "btn-outline-danger")
+        : order.dispatch_status === "FAILED" && ["PREPARING", "READY"].includes(order.status)
+          ? orderButton("retry-dispatch", order.order_id, "Tìm lại tài xế", "btn-outline-primary")
+          : "")).join("") || empty);
 
-      // Nhà hàng
-      document.getElementById("restaurantOrders").innerHTML = orders.map(o => `
-        <div class="col-md-6">
-          <div class="card shadow-sm border-0 p-3">
-            <div class="d-flex justify-content-between">
-              <span class="fw-bold">Đơn #${o.order_id.slice(0, 8)}</span>
-              <span class="badge bg-info text-dark">${o.status}</span>
-            </div>
-            <div class="small my-2">Tổng tiền: ${o.grand_total.toLocaleString()}đ | PTTT: ${o.payment_method}</div>
-            ${o.status === "PENDING" ? `
-              <div class="d-flex gap-2">
-                <button class="btn btn-sm btn-success" onclick="acceptOrder('${o.order_id}')">Xác nhận & Điều phối tài xế</button>
-                <button class="btn btn-sm btn-danger" onclick="cancelOrder('${o.order_id}', 'RESTAURANT')">Từ chối (Hết món)</button>
-              </div>
-            ` : ""}
-          </div>
-        </div>
-      `).join("");
+      setContent("restaurantOrders", kitchenOrders.map(order => orderCard(order, `
+        ${renderOrderItems(order.items)}
+        <div class="small"><strong>${formatMoney(order.grand_total)}</strong> · ${paymentSummary(order)}</div>
+      `, order.status === "PENDING"
+        ? (order.payment_method === "ONLINE" && order.payment_status !== "SUCCESS"
+            ? '<span class="text-muted small">Đang chờ khách thanh toán</span>'
+            : orderButton("restaurant-accept", order.order_id, "Xác nhận đơn", "btn-success"))
+          + orderButton("restaurant-cancel", order.order_id, "Từ chối đơn", "btn-outline-danger")
+        : order.status === "PREPARING"
+          ? orderButton("restaurant-ready", order.order_id, "Món đã sẵn sàng", "btn-success")
+          : "")).join("") || empty);
 
-      // Tài xế
-      document.getElementById("driverOrders").innerHTML = orders.map(o => `
-        <div class="col-md-6">
-          <div class="card shadow-sm border-0 p-3">
-            <div class="fw-bold">Chuyến giao #${o.order_id.slice(0, 8)} - Trạng thái: ${o.status}</div>
-            <div class="small text-muted my-1">Địa chỉ khách: ${o.delivery_address}</div>
-            <div class="small mb-2">Trạng thái điều phối: <strong>${o.assignment_status}</strong></div>
-            ${o.assignment_status === "OFFERED" ? `<button class="btn btn-sm btn-warning fw-bold" onclick="driverAccept('${o.assignment_id}')">NHẬN ĐƠN NGAY</button>` : ""}
-            ${o.status === "DELIVERING" ? `<button class="btn btn-sm btn-success fw-bold" onclick="completeOrder('${o.order_id}')">XÁC NHẬN ĐÃ GIAO HÀNG</button>` : ""}
-          </div>
-        </div>
-      `).join("");
+      setContent("driverOrders", orders.map(order => {
+        const canAccept = order.assignment_status === "OFFERED" && order.assignment_id;
+        const buttons = canAccept
+          ? orderButton("driver-accept", order.assignment_id, "Nhận chuyến", "btn-warning")
+            + orderButton("driver-reject", order.assignment_id, "Từ chối chuyến", "btn-outline-danger")
+          : order.status === "DELIVERING"
+            ? orderButton("complete", order.order_id, "Xác nhận đã giao", "btn-success")
+            : "";
+        return orderCard(order, `
+          <div class="small text-break">Địa chỉ giao: ${escapeHtml(order.delivery_address)}</div>
+          <div class="small mt-1">Điều phối: ${escapeHtml(label(dispatchLabels, order.assignment_status))}</div>
+        `, buttons);
+      }).join("") || empty);
 
-      // Admin
-      document.getElementById("adminOrders").innerHTML = `
-        <table class="table table-bordered table-sm align-middle mb-0">
+      setContent("adminOrders", orders.length ? `
+        <table class="table table-bordered table-sm align-middle bg-white">
           <thead class="table-dark">
-            <tr><th>Mã Đơn</th><th>Tổng Tiền</th><th>PTTT</th><th>Trạng Thái Tiền</th><th>Trạng Thái Đơn</th></tr>
+            <tr>
+              <th scope="col">Mã đơn</th>
+              <th scope="col">Tổng tiền</th>
+              <th scope="col">Phương thức</th>
+              <th scope="col">Thanh toán</th>
+              <th scope="col">Trạng thái đơn</th>
+            </tr>
           </thead>
           <tbody>
-            ${orders.map(o => `
+            ${orders.map(order => `
               <tr>
-                <td>#${o.order_id.slice(0, 8)}</td>
-                <td>${o.grand_total.toLocaleString()}đ</td>
-                <td>${o.payment_method}</td>
-                <td><span class="badge ${o.payment_status === 'REFUND_PROCESSING' ? 'bg-danger' : 'bg-secondary'}">${o.payment_status}</span></td>
-                <td>${o.status}</td>
+                <td>#${escapeHtml(String(order.order_id).slice(0, 8))}</td>
+                <td class="text-nowrap">${formatMoney(order.grand_total)}</td>
+                <td>${escapeHtml(label(paymentLabels, order.payment_method))}</td>
+                <td>
+                  ${escapeHtml(label(paymentLabels, order.payment_status))}
+                  ${order.status === "CANCELLED" && order.payment_method === "ONLINE"
+                    && order.payment_status === "REFUND_PROCESSING"
+                    ? orderButton("confirm-refund", order.order_id, "Xác nhận hoàn tiền mô phỏng", "btn-outline-primary")
+                    : ""}
+                </td>
+                <td>${escapeHtml(label(orderLabels, order.status))}</td>
               </tr>
             `).join("")}
           </tbody>
         </table>
-      `;
+      ` : empty);
+
+      syncControls();
     }
 
-    async function acceptOrder(id) {
-      await fetch(`/api/v1/orders/${id}/restaurant-accept`, { method: "POST" });
-      loadOrders();
-    }
-    async function cancelOrder(id, role) {
-      const res = await fetch(`/api/v1/orders/${id}/cancel?role=${role}`, { method: "POST" });
-      const data = await res.json();
-      alert(data.message || data.detail);
-      loadOrders();
-    }
-    async function driverAccept(assignId) {
-      await fetch(`/api/v1/dispatch/${assignId}/accept`, { method: "POST" });
-      loadOrders();
-    }
-    async function completeOrder(id) {
-      await fetch(`/api/v1/orders/${id}/complete`, { method: "POST" });
-      loadOrders();
+    function loadOrders() {
+      if (!currentUser) return Promise.resolve();
+      if (ordersRequest) return ordersRequest;
+
+      ordersRequest = (async () => {
+        try {
+          const orders = await api("/api/v1/orders");
+          if (!Array.isArray(orders)) throw new Error("Danh sách đơn không hợp lệ.");
+          renderOrders(orders);
+          orderLists.forEach(list => list.parentElement.querySelector(".orders-error")?.remove());
+        } catch (error) {
+          orderLists.forEach(list => {
+            if (list.parentElement.querySelector(".orders-error")) return;
+            const message = document.createElement("p");
+            message.className = "orders-error text-danger small";
+            message.textContent = "Chưa cập nhật được đơn hàng. Trang sẽ tự thử lại.";
+            list.before(message);
+          });
+        } finally {
+          ordersRequest = null;
+        }
+      })();
+
+      return ordersRequest;
     }
 
-    initApp();
+    async function refreshAfterChange() {
+      if (ordersRequest) await ordersRequest;
+      await loadOrders();
+    }
+
+    async function handleOrderAction(event) {
+      const button = event.target.closest("[data-action]");
+      if (!button || orderActionBusy) return;
+
+      const id = encodeURIComponent(button.dataset.id);
+      const action = button.dataset.action;
+      const routes = {
+        "confirm-payment": "/api/v1/orders/" + id + "/mock-payment/confirm",
+        "confirm-refund": "/api/v1/orders/" + id + "/mock-payment/refund",
+        "customer-cancel": `/api/v1/orders/${id}/cancel?role=CUSTOMER`,
+        "restaurant-cancel": `/api/v1/orders/${id}/cancel?role=RESTAURANT`,
+        "restaurant-accept": `/api/v1/orders/${id}/restaurant-accept`,
+        "restaurant-ready": `/api/v1/orders/${id}/restaurant-ready`,
+        "driver-accept": `/api/v1/dispatch/${id}/accept`,
+        "driver-reject": `/api/v1/dispatch/${id}/reject`,
+        "retry-dispatch": `/api/v1/orders/${id}/retry-dispatch`,
+        "complete": `/api/v1/orders/${id}/complete`
+      };
+
+      if (action === "customer-cancel" && !window.confirm("Bạn muốn hủy đơn này?")) return;
+      if (action === "restaurant-cancel" && !window.confirm("Bạn muốn từ chối đơn này?")) return;
+
+      orderActionBusy = true;
+      syncControls();
+
+      try {
+        await api(routes[action], { method: "POST" });
+        const message = {
+          "customer-cancel": "Đã hủy đơn.",
+          "restaurant-cancel": "Đã từ chối đơn.",
+          "restaurant-accept": "Đã xác nhận đơn. Bếp có thể bắt đầu chế biến.",
+          "restaurant-ready": "Món đã sẵn sàng. Hệ thống đang tìm tài xế.",
+          "driver-accept": "Đã nhận chuyến.",
+          "driver-reject": "Đã từ chối chuyến. Hệ thống sẽ tìm tài xế khác.",
+          "retry-dispatch": "Hệ thống đang tìm lại tài xế.",
+          "confirm-payment": "Đã xác nhận thanh toán mô phỏng.",
+          "confirm-refund": "Đã xác nhận hoàn tiền mô phỏng.",
+          "complete": "Đã xác nhận giao hàng."
+        }[action];
+        showNotice(message);
+        if (action === "customer-cancel") showCheckoutNotice(message);
+      } catch (error) {
+        showNotice(`Chưa xác nhận được thao tác. ${error.message}`, "danger");
+        if (action === "customer-cancel") showCheckoutNotice(error.message, "danger");
+      } finally {
+        await refreshAfterChange();
+        orderActionBusy = false;
+        syncControls();
+      }
+    }
+
+    byId("authForm").addEventListener("submit", submitAuth);
+    byId("authToggle").addEventListener("click", toggleAuth);
+    byId("logout").addEventListener("click", () => {
+      sessionStorage.removeItem(tokenKey);
+      location.reload();
+    });
+
+    byId("searchInput").addEventListener("input", () => {
+      menuRequest?.abort();
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(loadMenu, 250);
+    });
+
+    byId("addressInput").addEventListener("input", event => {
+      event.target.setCustomValidity("");
+    });
+    byId("checkoutForm").addEventListener("submit", checkout);
+    byId("confirmReset").addEventListener("click", () => {
+      if (pendingFoodId !== null) void addToCart(pendingFoodId, true);
+    });
+
+    modalElement.addEventListener("hide.bs.modal", event => {
+      if (cartBusy && !byId("confirmReset").dataset.allowClose) event.preventDefault();
+    });
+    modalElement.addEventListener("hidden.bs.modal", () => {
+      pendingFoodId = null;
+      byId("resetError").classList.add("d-none");
+      syncControls();
+    });
+
+    orderLists.forEach(list => list.addEventListener("click", handleOrderAction));
+    byId("cartItems").addEventListener("click", async event => {
+      const button = event.target.closest("[data-cart-quantity]");
+      if (!button || button.disabled || !customerId || cartBusy || checkoutBusy ||
+          pendingFoodId !== null) return;
+
+      const itemId = button.closest("[data-cart-item-id]").dataset.cartItemId;
+      const quantity = Number(button.dataset.cartQuantity);
+      cartBusy = true;
+      syncControls();
+
+      try {
+        await api("/api/v1/cart/items/" + encodeURIComponent(itemId), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ quantity })
+        });
+      } catch (error) {
+        showNotice("Chưa cập nhật được giỏ. " + error.message, "danger");
+        byId("notice").focus();
+      } finally {
+        await loadCart();
+        cartBusy = false;
+        syncControls();
+      }
+    });
+
+    byId("restaurantOrderFilter").addEventListener("change", () => renderOrders(lastOrders));
+
+    void initialize();
   </script>
 </body>
 </html>

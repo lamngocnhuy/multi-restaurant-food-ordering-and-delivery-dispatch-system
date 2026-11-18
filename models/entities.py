@@ -36,6 +36,7 @@ class FoodItem(Base):
     restaurant_id = Column(String, ForeignKey("restaurants.id"), nullable=False)
     name = Column(String, nullable=False)
     price = Column(Float, nullable=False)
+    category = Column(String(16), nullable=False, default="FOOD", server_default="FOOD")
     image_url = Column(String, default="https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=400")
     status = Column(String, default="IN_STOCK") # IN_STOCK, OUT_OF_STOCK
 
@@ -77,6 +78,7 @@ class SubOrder(Base):
     restaurant_id = Column(String, ForeignKey("restaurants.id"), nullable=False)
     subtotal = Column(Float, nullable=False)
     status = Column(String, default="PENDING")  # PENDING, PREPARING, READY, REJECTED, DELIVERING, COMPLETED
+    dispatch_status = Column(String, nullable=True)
     __table_args__ = (UniqueConstraint("order_id", "restaurant_id", name="uq_order_restaurant"),)
 
 # 8. Bảng Chi tiết món đã đặt (Lưu cố định giá tại thời điểm đặt - BR02)

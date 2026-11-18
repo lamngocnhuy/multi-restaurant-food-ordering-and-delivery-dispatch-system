@@ -1,0 +1,144 @@
+:root {
+  --page: #f5f7f4;
+  --surface: #fff;
+  --ink: #192720;
+  --muted: #55645c;
+  --brand: #23553f;
+  --brand-hover: #193e2e;
+  --border: #dce5de;
+  --soft: #eef5ef;
+}
+
+body.bg-light {
+  color: var(--ink);
+  background: var(--page) !important;
+}
+
+header.bg-dark {
+  background: #172e24 !important;
+}
+
+header nav a {
+  letter-spacing: 0.045em;
+}
+
+#authPanel {
+  margin-top: clamp(1.5rem, 7vh, 5rem);
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+#authPanel .card-body {
+  padding: clamp(1.5rem, 5vw, 2.5rem) !important;
+  border-top: 6px solid var(--brand);
+}
+
+#authTitle {
+  margin-bottom: 1.25rem;
+  font-size: 1.8rem;
+  font-weight: 750;
+}
+
+#authError:empty,
+#ownerMenuMessage:empty {
+  display: none;
+}
+
+#authPanel .form-label,
+#checkoutForm .form-label,
+#ownerFoodForm .form-label {
+  color: var(--ink);
+  margin-bottom: 0.4rem;
+  font-weight: 650;
+}
+
+#authPanel .form-control,
+#checkoutForm .form-control,
+#checkoutForm .form-select,
+#ownerFoodForm .form-control,
+#ownerFoodForm .form-select {
+  min-height: 2.75rem;
+  border-color: var(--border);
+  border-radius: 0.6rem;
+}
+
+#authPanel .form-control:focus,
+#checkoutForm .form-control:focus,
+#checkoutForm .form-select:focus,
+#ownerFoodForm .form-control:focus,
+#ownerFoodForm .form-select:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 0.2rem rgb(35 85 63 / 16%);
+}
+
+#authSubmit,
+#checkoutButton,
+#ownerFoodSave {
+  min-height: 2.75rem;
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+#authSubmit:hover,
+#checkoutButton:hover,
+#ownerFoodSave:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+}
+
+#authToggle {
+  color: var(--brand);
+}
+
+#cartHeading {
+  padding: 0.9rem 1rem;
+  color: var(--ink);
+  background: var(--soft) !important;
+  border-bottom-color: var(--border);
+}
+
+#checkoutForm {
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+#ownerMenuHeading {
+  margin-bottom: 1rem;
+  font-size: 1.35rem;
+}
+
+#ownerFoodForm {
+  margin-inline: 0;
+  padding: 0 0.75rem 1rem;
+  background: var(--soft);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+#ownerMenuList th {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+#ownerMenuList td,
+#ownerMenuList th {
+  padding-block: 0.75rem;
+}
+
+@media (max-width: 575.98px) {
+  header nav {
+    align-items: flex-start !important;
+  }
+
+  #authPanel {
+    margin-top: 1rem;
+  }
+
+  #ownerFoodSave {
+    width: 100%;
+  }
+
+  #ownerFoodCancel {
+    margin-top: 0.5rem;
+  }
+}

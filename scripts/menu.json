@@ -1,0 +1,54 @@
+[
+  {
+    "email": "pho@gmail.com",
+    "name": "Phở Bò Gia Truyền Hà Nội",
+    "address": "19 Nguyễn Hữu Thọ, Q.7",
+    "items": [
+      {"name": "Phở Bò Tái Nạm", "price": 45000, "category": "FOOD", "image_url": "/static/phobo.png"},
+      {"name": "Phở Đặc Biệt Bát Đá", "price": 65000, "category": "FOOD", "image_url": "/static/phobatda.jpg"}
+    ]
+  },
+  {
+    "email": "comtam@gmail.com",
+    "name": "Cơm Tấm Sườn Bì Chả",
+    "address": "45 Lê Văn Lương, Q.7",
+    "items": [
+      {"name": "Cơm Tấm Sườn Cốt Lết", "price": 40000, "category": "FOOD", "image_url": "/static/comsuon.jpg"},
+      {"name": "Cơm Tấm Sườn Bì Chả Trứng", "price": 55000, "category": "FOOD", "image_url": "/static/comdacbiet.jpg"}
+    ]
+  },
+  {
+    "email": "tra-sua@food-dispatch.local",
+    "name": "Trà Sữa Mộc",
+    "address": "28 Nguyễn Hữu Thọ, Quận 7",
+    "items": [
+      {"name": "Trà Sữa Trân Châu Đường Đen", "price": 45000, "category": "DRINK"},
+      {"name": "Trà Sữa Ô Long Kem Sữa", "price": 49000, "category": "DRINK"},
+      {"name": "Trà Sữa Matcha", "price": 52000, "category": "DRINK"},
+      {"name": "Trà Sữa Khoai Môn", "price": 42000, "category": "DRINK"}
+    ]
+  },
+  {
+    "email": "ca-phe@food-dispatch.local",
+    "name": "Góc Cà Phê & Trà Trái Cây",
+    "address": "16 Lê Văn Lương, Quận 7",
+    "items": [
+      {"name": "Cà Phê Sữa Đá", "price": 29000, "category": "DRINK"},
+      {"name": "Bạc Xỉu", "price": 35000, "category": "DRINK"},
+      {"name": "Trà Đào Cam Sả", "price": 42000, "category": "DRINK"},
+      {"name": "Trà Vải Hoa Lài", "price": 39000, "category": "DRINK"},
+      {"name": "Nước Ép Cam", "price": 45000, "category": "DRINK"}
+    ]
+  },
+  {
+    "email": "an-vat@food-dispatch.local",
+    "name": "Góc Ăn Vặt Sài Gòn",
+    "address": "71 Lâm Văn Bền, Quận 7",
+    "items": [
+      {"name": "Bánh Mì Thịt Nướng", "price": 35000, "category": "FOOD"},
+      {"name": "Gỏi Cuốn Tôm Thịt", "price": 35000, "category": "FOOD"},
+      {"name": "Bánh Tráng Trộn", "price": 32000, "category": "FOOD"},
+      {"name": "Khoai Tây Chiên", "price": 35000, "category": "FOOD"}
+    ]
+  }
+]

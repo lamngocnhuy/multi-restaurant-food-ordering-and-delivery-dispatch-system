@@ -1,22 +1,50 @@
-import os
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from api.auth import get_current_user, router as auth_router
+from api.admin_users import router as admin_users_router
+from api.driver_availability import router as driver_availability_router
+from datetime import timedelta
+from pathlib import Path
+from threading import Lock
+
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from database.connection import engine, Base, get_db, SessionLocal
-from models.entities import (
-    User, Restaurant, FoodItem, Cart, CartItem,
-    Order, SubOrder, OrderItem, DeliveryAssignment, Payment
-)
+from database.connection import Base, SessionLocal, engine, get_db
 from forms.schemas import AddToCartForm, CheckoutForm
-from services.dispatch_service import run_auto_dispatch_loop, trigger_refund_if_paid_online
+from models.entities import (
+    Cart,
+    CartItem,
+    DeliveryAssignment,
+    FoodItem,
+    Order,
+    OrderItem,
+    Payment,
+    Restaurant,
+    SubOrder,
+    User,
+)
+from services.dispatch_service import (
+    DISPATCH_TIMEOUT_SECONDS,
+    run_auto_dispatch_loop,
+    trigger_refund_if_paid_online,
+    utc_now,
+)
 
-# Tự động khởi tạo 10 bảng CSDL nếu chưa tồn tại
+
+ROOT = Path(__file__).resolve().parent.parent
+ASSET_DIR = ROOT / "asset"
+INDEX_FILE = ROOT / "controls" / "index.html"
+DELIVERY_FEE = 15_000
+SEED_LOCK = Lock()
+
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Multi-Restaurant Food Ordering & Delivery Dispatch System", version="1.0.0")
+app = FastAPI(
+    title="Multi-Restaurant Food Ordering & Delivery Dispatch System",
+    version="1.0.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,345 +53,697 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if os.path.isdir("asset"):
-    app.mount("/static", StaticFiles(directory="asset"), name="static")
+if ASSET_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=ASSET_DIR), name="static")
 
-# 0. Phục vụ giao diện Web chính
+
+app.include_router(auth_router)
+app.include_router(admin_users_router)
+app.include_router(driver_availability_router)
+
+
 @app.get("/")
 def serve_web_app():
-    if os.path.exists("controls/index.html"):
-        return FileResponse("controls/index.html")
-    return {"message": "Backend API đang hoạt động! Truy cập /docs để xem tài liệu API."}
+    if INDEX_FILE.is_file():
+        return FileResponse(INDEX_FILE)
+    return {"message": "Backend API đang hoạt động. Truy cập /docs để xem tài liệu API."}
 
-# 1. Khởi tạo dữ liệu mẫu để chạy thử hệ thống
+
+def require_role(user, *roles):
+    if user.role not in roles:
+        raise HTTPException(403, "Tài khoản không có quyền thực hiện thao tác này")
+
+
+def require_customer(user, customer_id):
+    require_role(user, "CUSTOMER")
+    if user.id != customer_id:
+        raise HTTPException(403, "Bạn chỉ được truy cập dữ liệu của mình")
+
+
+def require_restaurant(db, user, sub):
+    require_role(user, "RESTAURANT")
+    restaurant = db.get(Restaurant, sub.restaurant_id) if sub else None
+    if restaurant is None or restaurant.owner_id != user.id:
+        raise HTTPException(404, "Không tìm thấy đơn của nhà hàng")
+
+
 @app.post("/api/v1/seed")
-def seed_sample_data(db: Session = Depends(get_db)):
-    if db.query(User).first():
-        cust = db.query(User).filter(User.role == "CUSTOMER").first()
-        drv = db.query(User).filter(User.role == "DRIVER").first()
-        return {"message": "Dữ liệu đã sẵn sàng", "customer_id": cust.id, "driver_id": drv.id}
+def seed_sample_data(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_role(user, "ADMIN")
 
-    cust = User(role="CUSTOMER", full_name="Nguyễn Văn A", email="khach1@gmail.com", password_hash="hashed_pass")
-    owner1 = User(role="RESTAURANT", full_name="Chủ Quán Phở Hà Nội", email="pho@gmail.com", password_hash="hashed_pass")
-    owner2 = User(role="RESTAURANT", full_name="Chủ Quán Cơm Tấm Sài Gòn", email="comtam@gmail.com", password_hash="hashed_pass")
-    drv1 = User(role="DRIVER", full_name="Tài xế Trần Văn B", email="driver1@gmail.com", password_hash="hashed_pass", is_online=True)
-    drv2 = User(role="DRIVER", full_name="Tài xế Lê Văn C", email="driver2@gmail.com", password_hash="hashed_pass", is_online=True)
-    db.add_all([cust, owner1, owner2, drv1, drv2])
-    db.commit()
+    def ensure_user(email, role, full_name, **extra):
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            user = User(
+                email=email,
+                role=role,
+                full_name=full_name,
+                password_hash="hashed_pass",
+                **extra,
+            )
+            db.add(user)
+            db.flush()
+        return user
 
-    r1 = Restaurant(owner_id=owner1.id, name="Phở Bò Gia Truyền Hà Nội", address="19 Nguyễn Hữu Thọ, Q.7")
-    r2 = Restaurant(owner_id=owner2.id, name="Cơm Tấm Sườn Bì Chả", address="45 Lê Văn Lương, Q.7")
-    db.add_all([r1, r2])
-    db.commit()
+    def ensure_restaurant(owner, name, address, menu):
+        restaurant = db.query(Restaurant).filter(
+            Restaurant.owner_id == owner.id,
+            Restaurant.name == name,
+        ).first()
 
-    foods = [
-        FoodItem(restaurant_id=r1.id, name="Phở Bò Tái Nạm", price=45000),
-        FoodItem(restaurant_id=r1.id, name="Phở Đặc Biệt Bát Đá", price=65000),
-        FoodItem(restaurant_id=r2.id, name="Cơm Tấm Sườn Cốt Lết", price=40000),
-        FoodItem(restaurant_id=r2.id, name="Cơm Tấm Sườn Bì Chả Trứng", price=55000),
-    ]
-    db.add_all(foods)
-    db.commit()
-    return {"message": "Khởi tạo dữ liệu thành công", "customer_id": cust.id, "driver_id": drv1.id}
+        if restaurant is None:
+            restaurant = Restaurant(owner_id=owner.id, name=name, address=address)
+            db.add(restaurant)
+            db.flush()
 
-# 2. Tra cứu thực đơn & Tìm kiếm (DT-MENU-01, DT-MENU-02)
+        existing_names = {
+            name for (name,) in db.query(FoodItem.name).filter(
+                FoodItem.restaurant_id == restaurant.id
+            )
+        }
+        for food_name, price in menu:
+            if food_name not in existing_names:
+                db.add(FoodItem(
+                    restaurant_id=restaurant.id,
+                    name=food_name,
+                    price=price,
+                ))
+
+    with SEED_LOCK:
+        try:
+            customer = ensure_user("khach1@gmail.com", "CUSTOMER", "Nguyễn Văn A")
+            pho_owner = ensure_user("pho@gmail.com", "RESTAURANT", "Chủ Quán Phở Hà Nội")
+            rice_owner = ensure_user(
+                "comtam@gmail.com", "RESTAURANT", "Chủ Quán Cơm Tấm Sài Gòn"
+            )
+            driver = ensure_user(
+                "driver1@gmail.com", "DRIVER", "Tài xế Trần Văn B", is_online=True
+            )
+            ensure_user(
+                "driver2@gmail.com", "DRIVER", "Tài xế Lê Văn C", is_online=True
+            )
+
+            ensure_restaurant(
+                pho_owner,
+                "Phở Bò Gia Truyền Hà Nội",
+                "19 Nguyễn Hữu Thọ, Q.7",
+                [("Phở Bò Tái Nạm", 45000), ("Phở Đặc Biệt Bát Đá", 65000)],
+            )
+            ensure_restaurant(
+                rice_owner,
+                "Cơm Tấm Sườn Bì Chả",
+                "45 Lê Văn Lương, Q.7",
+                [("Cơm Tấm Sườn Cốt Lết", 40000), ("Cơm Tấm Sườn Bì Chả Trứng", 55000)],
+            )
+
+            customer_id, driver_id = customer.id, driver.id
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    return {
+        "message": "Dữ liệu mẫu đã sẵn sàng",
+        "customer_id": customer_id,
+        "driver_id": driver_id,
+    }
+
+
 @app.get("/api/v1/menu")
-def get_menu(keyword: str = "", db: Session = Depends(get_db)):
-    query = db.query(FoodItem, Restaurant).join(Restaurant, FoodItem.restaurant_id == Restaurant.id)
+def get_menu(
+    keyword: str = "",
+    category: str = "",
+    db: Session = Depends(get_db),
+):
+    if category not in ("", "FOOD", "DRINK"):
+        raise HTTPException(422, "Phân loại thực đơn không hợp lệ")
+
+    query = db.query(FoodItem, Restaurant).join(
+        Restaurant, FoodItem.restaurant_id == Restaurant.id
+    )
+    keyword = keyword.strip()
     if keyword:
-        query = query.filter(FoodItem.name.ilike(f"%{keyword}%"))
+        query = query.filter(FoodItem.name.icontains(keyword, autoescape=True))
+    if category:
+        query = query.filter(FoodItem.category == category)
+
     return [
         {
             "id": food.id,
             "name": food.name,
             "price": food.price,
+            "category": food.category,
             "status": food.status,
             "image_url": food.image_url,
-            "restaurant_id": rest.id,
-            "restaurant_name": rest.name
+            "restaurant_id": restaurant.id,
+            "restaurant_name": restaurant.name,
         }
-        for food, rest in query.all()
+        for food, restaurant in query.order_by(Restaurant.name, FoodItem.name).all()
     ]
 
-# 3. Quản lý Giỏ hàng & Kiểm tra ràng buộc REQ-9 (DT-MENU-03)
-@app.post("/api/v1/cart/items")
-def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db)):
-    food = db.query(FoodItem).filter(FoodItem.id == form.food_id).first()
-    if not food:
-        raise HTTPException(status_code=404, detail="Món ăn không tồn tại")
 
-    # Kiểm tra đầu vào (BVA): số lượng 1-99, phụ phí không âm
-    if form.quantity < 1 or form.quantity > 99:
-        raise HTTPException(status_code=400, detail="Số lượng phải từ 1 đến 99")
+def lock_customer(db: Session, customer_id: str):
+    customer = db.query(User).filter(
+        User.id == customer_id,
+        User.role == "CUSTOMER",
+    ).with_for_update().first()
+    if customer is None:
+        raise HTTPException(404, "Không tìm thấy khách hàng")
+    return customer
+
+
+@app.post("/api/v1/cart/items")
+def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_customer(user, form.customer_id)
+    if not 1 <= form.quantity <= 99:
+        raise HTTPException(400, "Số lượng phải từ 1 đến 99")
     if form.size_extra < 0 or form.topping_extra < 0:
-        raise HTTPException(status_code=400, detail="Phụ phí không hợp lệ")
+        raise HTTPException(400, "Phụ phí không hợp lệ")
+
+    lock_customer(db, form.customer_id)
+
+    food = db.query(FoodItem).filter(FoodItem.id == form.food_id).first()
+    if food is None:
+        raise HTTPException(404, "Món ăn không tồn tại")
 
     cart = db.query(Cart).filter(Cart.customer_id == form.customer_id).first()
-    if not cart:
-        cart = Cart(customer_id=form.customer_id, restaurant_id=food.restaurant_id, total_amount=0)
+    if cart is None:
+        cart = Cart(
+            customer_id=form.customer_id,
+            restaurant_id=food.restaurant_id,
+            total_amount=0,
+        )
         db.add(cart)
-        db.commit()
-        db.refresh(cart)
+        db.flush()
 
-    # Kiểm tra quy tắc REQ-9: Chỉ cho phép đặt món tại 01 nhà hàng duy nhất
+    item_query = db.query(CartItem).filter(CartItem.cart_id == cart.id)
+
     if cart.restaurant_id and cart.restaurant_id != food.restaurant_id:
-        existing_items = db.query(CartItem).filter(CartItem.cart_id == cart.id).count()
-        if existing_items > 0 and not form.force_reset_cart:
-            raise HTTPException(
-                status_code=409,
-                detail="REQ-9_CONFLICT: Giỏ hàng đang chứa món từ nhà hàng khác."
-            )
-        db.query(CartItem).filter(CartItem.cart_id == cart.id).delete()
-        cart.restaurant_id = food.restaurant_id
+        if item_query.first() is not None:
+            if not form.force_reset_cart:
+                raise HTTPException(
+                    409, "REQ-9_CONFLICT: Giỏ hàng đang chứa món từ nhà hàng khác."
+                )
+            item_query.delete(synchronize_session="fetch")
 
     cart.restaurant_id = food.restaurant_id
-    final_unit_price = food.price + form.size_extra + form.topping_extra
+    unit_price = food.price + form.size_extra + form.topping_extra
+    item = item_query.filter(CartItem.food_id == food.id).first()
 
-    item = db.query(CartItem).filter(CartItem.cart_id == cart.id, CartItem.food_id == food.id).first()
-    if item:
-        item.quantity += form.quantity
-        item.unit_price = final_unit_price
-        item.options_note = form.options_note
-    else:
+    if item is None:
         db.add(CartItem(
             cart_id=cart.id,
             food_id=food.id,
             quantity=form.quantity,
-            unit_price=final_unit_price,
-            options_note=form.options_note
+            unit_price=unit_price,
+            options_note=form.options_note,
         ))
-    db.commit()
+    else:
+        if item.quantity + form.quantity > 99:
+            raise HTTPException(400, "Mỗi món chỉ được có tối đa 99 phần trong giỏ")
 
-    all_items = db.query(CartItem).filter(CartItem.cart_id == cart.id).all()
-    cart.total_amount = sum(i.quantity * i.unit_price for i in all_items)
+        item.quantity += form.quantity
+        item.unit_price = unit_price
+        item.options_note = form.options_note
+
+    db.flush()
+    total = sum(row.quantity * row.unit_price for row in item_query.all())
+    cart.total_amount = total
     db.commit()
-    return {"message": "Đã thêm vào giỏ hàng", "total_amount": cart.total_amount}
+    return {"message": "Đã thêm vào giỏ hàng", "total_amount": total}
+
+
+@app.put("/api/v1/cart/items/{item_id}")
+def update_cart_item(
+    item_id: str,
+    quantity: int = Body(..., embed=True, ge=0, le=99),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_role(user, "CUSTOMER")
+    lock_customer(db, user.id)
+
+    cart = db.query(Cart).filter(Cart.customer_id == user.id).first()
+    if cart is None:
+        raise HTTPException(404, "Không tìm thấy món trong giỏ của bạn")
+
+    items = db.query(CartItem).filter(CartItem.cart_id == cart.id)
+    item = items.filter(CartItem.id == item_id).first()
+    if item is None:
+        raise HTTPException(404, "Không tìm thấy món trong giỏ của bạn")
+
+    if quantity == 0:
+        db.delete(item)
+    else:
+        if quantity > item.quantity:
+            food = db.get(FoodItem, item.food_id)
+            if food is None or food.status == "OUT_OF_STOCK":
+                raise HTTPException(409, "Món đã hết. Bạn có thể giảm số lượng hoặc xóa món.")
+        item.quantity = quantity
+
+    db.flush()
+    remaining = items.all()
+    total = sum(row.quantity * row.unit_price for row in remaining)
+    cart.total_amount = total
+    if not remaining:
+        cart.restaurant_id = None
+
+    db.commit()
+    return {"quantity": quantity, "total_amount": total}
+
 
 @app.get("/api/v1/cart/{customer_id}")
-def get_cart(customer_id: str, db: Session = Depends(get_db)):
+def get_cart(customer_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_customer(user, customer_id)
     cart = db.query(Cart).filter(Cart.customer_id == customer_id).first()
-    if not cart:
+    if cart is None:
         return {"items": [], "total_amount": 0}
-    items = db.query(CartItem, FoodItem).join(FoodItem, CartItem.food_id == FoodItem.id).filter(CartItem.cart_id == cart.id).all()
+
+    rows = db.query(CartItem, FoodItem).join(
+        FoodItem, CartItem.food_id == FoodItem.id
+    ).filter(CartItem.cart_id == cart.id).all()
+
     return {
         "cart_id": cart.id,
         "restaurant_id": cart.restaurant_id,
-        "total_amount": cart.total_amount,
+        "total_amount": sum(item.quantity * item.unit_price for item, _ in rows),
         "items": [
             {
-                "id": ci.id,
-                "food_name": fi.name,
-                "quantity": ci.quantity,
-                "unit_price": ci.unit_price,
-                "options_note": ci.options_note
-            } for ci, fi in items
-        ]
+                "id": item.id,
+                "food_id": food.id,
+                "food_name": food.name,
+                "image_url": food.image_url,
+                "quantity": item.quantity,
+                "unit_price": item.unit_price,
+                "options_note": item.options_note,
+            }
+            for item, food in rows
+        ],
     }
 
-# 4. Đặt hàng (Checkout) & Tách SubOrder (BR08, DT-ORD-01, DT-ORD-02)
+
 @app.post("/api/v1/orders/checkout")
-def checkout(form: CheckoutForm, db: Session = Depends(get_db)):
-    # Kiểm tra đầu vào
-    if not form.delivery_address or not form.delivery_address.strip():
-        raise HTTPException(status_code=400, detail="Vui lòng nhập đầy đủ thông tin giao hàng")
+def checkout(form: CheckoutForm, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_customer(user, form.customer_id)
+    address = (form.delivery_address or "").strip()
+    if not address:
+        raise HTTPException(400, "Vui lòng nhập đầy đủ thông tin giao hàng")
     if form.payment_method not in ("COD", "ONLINE"):
-        raise HTTPException(status_code=400, detail="Phương thức thanh toán không hợp lệ")
+        raise HTTPException(400, "Phương thức thanh toán không hợp lệ")
 
+    lock_customer(db, form.customer_id)
     cart = db.query(Cart).filter(Cart.customer_id == form.customer_id).first()
-    if not cart or not cart.restaurant_id:
-        raise HTTPException(status_code=400, detail="Giỏ hàng trống")
+    if cart is None or not cart.restaurant_id:
+        raise HTTPException(400, "Giỏ hàng trống")
 
-    cart_items = db.query(CartItem).filter(CartItem.cart_id == cart.id).all()
-    if not cart_items:
-        raise HTTPException(status_code=400, detail="Giỏ hàng trống")
+    items = db.query(CartItem).filter(CartItem.cart_id == cart.id).all()
+    if not items:
+        raise HTTPException(400, "Giỏ hàng trống")
 
-    delivery_fee = 15000.0
-    grand_total = cart.total_amount + delivery_fee
+    subtotal = sum(item.quantity * item.unit_price for item in items)
+    grand_total = subtotal + DELIVERY_FEE
 
     order = Order(
         customer_id=form.customer_id,
-        delivery_address=form.delivery_address,
+        delivery_address=address,
         grand_total=grand_total,
-        status="PENDING"
+        status="PENDING",
     )
     db.add(order)
-    db.commit()
-    db.refresh(order)
+    db.flush()
 
     sub_order = SubOrder(
         order_id=order.id,
         restaurant_id=cart.restaurant_id,
-        subtotal=cart.total_amount,
-        status="PENDING"
+        subtotal=subtotal,
+        status="PENDING",
     )
     db.add(sub_order)
-    db.commit()
-    db.refresh(sub_order)
+    db.flush()
 
-    for ci in cart_items:
+    for item in items:
         db.add(OrderItem(
             sub_order_id=sub_order.id,
-            food_id=ci.food_id,
-            quantity=ci.quantity,
-            unit_price=ci.unit_price,
-            total_price=ci.quantity * ci.unit_price
+            food_id=item.food_id,
+            quantity=item.quantity,
+            unit_price=item.unit_price,
+            total_price=item.quantity * item.unit_price,
         ))
+        db.delete(item)
 
     db.add(Payment(
         order_id=order.id,
         method=form.payment_method,
         amount=grand_total,
-        status="SUCCESS" if form.payment_method == "ONLINE" else "PENDING"
+        status="PENDING",
     ))
 
-    db.query(CartItem).filter(CartItem.cart_id == cart.id).delete()
     cart.restaurant_id = None
     cart.total_amount = 0
+    order_id, sub_order_id = order.id, sub_order.id
     db.commit()
 
-    return {"message": "Đặt hàng thành công", "order_id": order.id, "sub_order_id": sub_order.id}
+    return {
+        "message": "Đặt hàng thành công",
+        "order_id": order_id,
+        "sub_order_id": sub_order_id,
+    }
 
-# 5. Quản lý Đơn hàng, Xác nhận Bếp & Hủy đơn (BR10, ST-09)
+
 @app.get("/api/v1/orders")
-def list_all_orders(customer_id: str = None, db: Session = Depends(get_db)):
+def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(Order).order_by(Order.created_at.desc())
-    # Giao diện Khách nên truyền customer_id để chỉ thấy đơn của mình
-    if customer_id:
+    require_role(user, "CUSTOMER", "RESTAURANT", "DRIVER", "ADMIN")
+    if user.role == "CUSTOMER":
+        query = query.filter(Order.customer_id == user.id)
+    elif user.role == "RESTAURANT":
+        owned = db.query(SubOrder.order_id).join(
+            Restaurant, Restaurant.id == SubOrder.restaurant_id
+        ).filter(Restaurant.owner_id == user.id)
+        query = query.filter(Order.id.in_(owned))
+    elif user.role == "DRIVER":
+        assigned = db.query(SubOrder.order_id).join(
+            DeliveryAssignment, DeliveryAssignment.sub_order_id == SubOrder.id
+        ).filter(
+            DeliveryAssignment.driver_id == user.id,
+            DeliveryAssignment.status.in_(("OFFERED", "ACCEPTED", "COMPLETED")),
+        )
+        query = query.filter(Order.id.in_(assigned))
+    elif customer_id:
         query = query.filter(Order.customer_id == customer_id)
+
+    orders = query.all()
+    items_by_sub_order = {}
+
+    if orders:
+        rows = (
+            db.query(OrderItem, FoodItem.name)
+            .join(SubOrder, SubOrder.id == OrderItem.sub_order_id)
+            .outerjoin(FoodItem, FoodItem.id == OrderItem.food_id)
+            .filter(SubOrder.order_id.in_([order.id for order in orders]))
+            .order_by(OrderItem.id)
+            .all()
+        )
+
+        for item, food_name in rows:
+            items_by_sub_order.setdefault(item.sub_order_id, []).append({
+                "name": food_name or "Món đã lưu trong đơn",
+                "quantity": item.quantity,
+                "unit_price": item.unit_price,
+                "line_total": item.total_price,
+            })
+
     output = []
-    for o in query.all():
-        sub = db.query(SubOrder).filter(SubOrder.order_id == o.id).first()
-        pay = db.query(Payment).filter(Payment.order_id == o.id).first()
-        assign = db.query(DeliveryAssignment).filter(
-            DeliveryAssignment.sub_order_id == (sub.id if sub else ""),
-            DeliveryAssignment.status.in_(["OFFERED", "ACCEPTED", "COMPLETED"])
-        ).first()
+    for order in orders:
+        sub = db.query(SubOrder).filter(SubOrder.order_id == order.id).first()
+        payment = db.query(Payment).filter(Payment.order_id == order.id).first()
+        assignment = None
+
+        if sub is not None:
+            assignment = db.query(DeliveryAssignment).filter(
+                DeliveryAssignment.sub_order_id == sub.id,
+                DeliveryAssignment.status.in_(["OFFERED", "ACCEPTED", "COMPLETED"]),
+            )
+            if user.role == "DRIVER":
+                assignment = assignment.filter(DeliveryAssignment.driver_id == user.id)
+            assignment = assignment.order_by(DeliveryAssignment.assigned_at.desc()).first()
+
         output.append({
-            "order_id": o.id,
+            "order_id": order.id,
             "sub_order_id": sub.id if sub else None,
-            "delivery_address": o.delivery_address,
-            "grand_total": o.grand_total,
-            "status": o.status,
-            "dispatch_status": getattr(sub, "dispatch_status", None) if sub else None,
-            "payment_method": pay.method if pay else "COD",
-            "payment_status": pay.status if pay else "PENDING",
-            "assignment_id": assign.id if assign else None,
-            "assignment_status": assign.status if assign else "NONE"
+            "items": items_by_sub_order.get(sub.id, []) if sub else [],
+            "delivery_address": order.delivery_address,
+            "grand_total": order.grand_total,
+            "status": order.status,
+            "dispatch_status": sub.dispatch_status if sub else None,
+            "payment_method": payment.method if payment else "COD",
+            "payment_status": payment.status if payment else "PENDING",
+            "assignment_id": assignment.id if assignment else None,
+            "assignment_status": assignment.status if assignment else "NONE",
         })
+
     return output
 
+
+def lock_order(db: Session, order_id: str):
+    order = db.query(Order).filter(
+        Order.id == order_id
+    ).with_for_update().first()
+    if order is None:
+        raise HTTPException(404, "Không tìm thấy đơn hàng")
+    return order
+
+
+def find_sub_order(db: Session, order_id: str):
+    return db.query(SubOrder).filter(SubOrder.order_id == order_id).first()
+
+
 @app.post("/api/v1/orders/{order_id}/restaurant-accept")
-def restaurant_accept_order(order_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    order = db.query(Order).filter(Order.id == order_id).first()
-    sub = db.query(SubOrder).filter(SubOrder.order_id == order_id).first()
-    if not order or not sub:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
-    # Chỉ nhận đơn đang chờ xác nhận (tránh nhận đơn đã hủy / bấm 2 lần)
+def restaurant_accept_order(
+    order_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_role(user, "RESTAURANT")
+    order = lock_order(db, order_id)
+    sub = find_sub_order(db, order.id)
+    require_restaurant(db, user, sub)
+
     if order.status != "PENDING":
-        raise HTTPException(status_code=400, detail="Đơn hàng không ở trạng thái chờ xác nhận")
+        raise HTTPException(409, "Đơn hàng không ở trạng thái chờ xác nhận")
+
+    payment = db.query(Payment).filter(Payment.order_id == order.id).first()
+    if payment and payment.method == "ONLINE" and payment.status != "SUCCESS":
+        raise HTTPException(409, "Đơn đang chờ khách thanh toán")
+
     order.status = "PREPARING"
     sub.status = "PREPARING"
+    db.commit()
+    return {"message": "Nhà hàng đã nhận đơn và bắt đầu chế biến."}
+
+
+@app.post("/api/v1/orders/{order_id}/restaurant-ready")
+def restaurant_mark_ready(
+    order_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_role(user, "RESTAURANT")
+    order = lock_order(db, order_id)
+    sub = find_sub_order(db, order.id)
+    require_restaurant(db, user, sub)
+
+    if order.status != "PREPARING" or sub.status != "PREPARING":
+        raise HTTPException(409, "Chỉ có thể báo sẵn sàng khi đơn đang chế biến")
+
+    already_dispatching = sub.dispatch_status == "SEARCHING"
+    order.status = "READY"
+    sub.status = "READY"
     sub.dispatch_status = "SEARCHING"
+    sub_id = sub.id
     db.commit()
 
-    background_tasks.add_task(run_auto_dispatch_loop, sub.id, SessionLocal)
-    return {"message": "Nhà hàng đã xác nhận. Hệ thống đang điều phối tài xế!"}
+    if not already_dispatching:
+        background_tasks.add_task(run_auto_dispatch_loop, sub_id, SessionLocal)
+
+    return {"message": "Món đã sẵn sàng. Hệ thống đang tìm tài xế."}
+
 
 @app.post("/api/v1/orders/{order_id}/cancel")
-def cancel_order(order_id: str, role: str = "CUSTOMER", db: Session = Depends(get_db)):
-    order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+def cancel_order(order_id: str, role: str = "CUSTOMER", db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_role(user, "CUSTOMER", "RESTAURANT")
+    if role != user.role:
+        raise HTTPException(403, "Vai trò không khớp với tài khoản")
 
-    # Đơn đã kết thúc thì không hủy lại (tránh hoàn tiền lặp)
-    if order.status in ("CANCELLED", "COMPLETED"):
-        raise HTTPException(status_code=400, detail="Đơn hàng đã kết thúc, không thể hủy")
-
-    if role == "CUSTOMER" and order.status != "PENDING":
-        raise HTTPException(status_code=400, detail="Không thể hủy đơn hàng khi nhà hàng đã tiếp nhận chế biến (BR10)!")
+    order = lock_order(db, order_id)
+    sub = find_sub_order(db, order.id)
+    if user.role == "CUSTOMER":
+        require_customer(user, order.customer_id)
+    else:
+        require_restaurant(db, user, sub)
+    if order.status != "PENDING":
+        raise HTTPException(400, "Chỉ có thể hủy hoặc từ chối đơn đang chờ xác nhận")
 
     order.status = "CANCELLED"
 
-    # Đồng bộ trạng thái SubOrder để vòng lặp điều phối tự dừng
-    sub = db.query(SubOrder).filter(SubOrder.order_id == order.id).first()
     if sub:
         sub.status = "CANCELLED"
-        # Thu hồi các đề nghị đang chờ tài xế
         db.query(DeliveryAssignment).filter(
             DeliveryAssignment.sub_order_id == sub.id,
-            DeliveryAssignment.status == "OFFERED"
-        ).update({"status": "CANCELLED"})
+            DeliveryAssignment.status == "OFFERED",
+        ).update({"status": "CANCELLED"}, synchronize_session=False)
 
     refunded = trigger_refund_if_paid_online(db, order.id)
+    if not refunded:
+        payment = db.query(Payment).filter(
+            Payment.order_id == order.id,
+            Payment.method == "ONLINE",
+            Payment.status == "PENDING",
+        ).first()
+        if payment:
+            payment.status = "CANCELLED"
     db.commit()
+
     return {
-        "message": "Đã hủy đơn hàng" + (" và kích hoạt quy trình hoàn tiền ST-09." if refunded else "."),
-        "refund_triggered": refunded
+        "message": (
+            "Đã hủy đơn hàng và kích hoạt quy trình hoàn tiền ST-09."
+            if refunded else "Đã hủy đơn hàng."
+        ),
+        "refund_triggered": refunded,
     }
 
-# 6. Tài xế nhận / từ chối đơn, tìm lại tài xế & Hoàn tất giao hàng
+
 @app.post("/api/v1/dispatch/{assignment_id}/accept")
-def driver_accept_trip(assignment_id: str, db: Session = Depends(get_db)):
-    assign = db.query(DeliveryAssignment).filter(DeliveryAssignment.id == assignment_id).first()
-    if not assign or assign.status != "OFFERED":
-        raise HTTPException(status_code=400, detail="Đề nghị giao hàng đã hết hạn hoặc không tồn tại")
+def driver_accept_trip(assignment_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_role(user, "DRIVER")
+    assignment_order = db.query(SubOrder.order_id).join(
+        DeliveryAssignment, DeliveryAssignment.sub_order_id == SubOrder.id
+    ).filter(
+        DeliveryAssignment.id == assignment_id,
+        DeliveryAssignment.driver_id == user.id,
+    ).first()
 
-    sub = db.query(SubOrder).filter(SubOrder.id == assign.sub_order_id).first()
-    # Đơn đã bị hủy giữa chừng thì không được nhận
-    if not sub or sub.status not in ("PREPARING", "READY"):
-        raise HTTPException(status_code=400, detail="Đơn hàng đã bị hủy hoặc không còn cần giao")
-    order = db.query(Order).filter(Order.id == sub.order_id).first()
+    if assignment_order is None:
+        raise HTTPException(400, "Đề nghị giao hàng không tồn tại")
 
-    assign.status = "ACCEPTED"
+    order = lock_order(db, assignment_order[0])
+    assignment = db.query(DeliveryAssignment).filter(
+        DeliveryAssignment.id == assignment_id,
+        DeliveryAssignment.driver_id == user.id,
+    ).with_for_update().first()
+
+    if assignment is None or assignment.status != "OFFERED":
+        raise HTTPException(400, "Đề nghị giao hàng đã hết hạn hoặc đã được xử lý")
+
+    sub = db.query(SubOrder).filter(SubOrder.id == assignment.sub_order_id).first()
+    if (
+        sub is None
+        or sub.status not in ("PREPARING", "READY")
+        or order.status not in ("PREPARING", "READY")
+    ):
+        raise HTTPException(400, "Đơn hàng không còn ở trạng thái có thể nhận giao")
+
+    if (
+        assignment.assigned_at is None
+        or utc_now() >= assignment.assigned_at + timedelta(seconds=DISPATCH_TIMEOUT_SECONDS)
+    ):
+        raise HTTPException(409, "Đề nghị giao hàng đã hết hạn")
+
+    assignment.status = "ACCEPTED"
+    sub.dispatch_status = "ASSIGNED"
     sub.status = "DELIVERING"
     order.status = "DELIVERING"
     db.commit()
     return {"message": "Tài xế đã nhận chuyến và đang giao hàng!"}
 
-@app.post("/api/v1/dispatch/{assignment_id}/reject")
-def driver_reject_trip(assignment_id: str, db: Session = Depends(get_db)):
-    assign = db.query(DeliveryAssignment).filter(DeliveryAssignment.id == assignment_id).first()
-    if not assign or assign.status != "OFFERED":
-        raise HTTPException(status_code=400, detail="Đề nghị giao hàng đã hết hạn hoặc không tồn tại")
-    assign.status = "REJECTED"
-    db.commit()
-    return {"message": "Tài xế đã từ chối chuyến, hệ thống chuyển cho tài xế khác."}
 
-# DT-DRV-04: Khách chọn "Tiếp tục tìm tài xế" sau khi báo thiếu tài xế
-@app.post("/api/v1/orders/{order_id}/retry-dispatch")
-def retry_dispatch(order_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    sub = db.query(SubOrder).filter(SubOrder.order_id == order_id).first()
-    if not sub:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
-    if sub.status not in ("PREPARING", "READY") or sub.dispatch_status != "FAILED":
-        raise HTTPException(status_code=400, detail="Đơn hàng không ở trạng thái thiếu tài xế")
-    # Đặt SEARCHING trước để chặn bấm nhiều lần tạo nhiều vòng lặp
-    sub.dispatch_status = "SEARCHING"
+@app.post("/api/v1/dispatch/{assignment_id}/reject")
+def driver_reject_trip(assignment_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_role(user, "DRIVER")
+    assignment = db.query(DeliveryAssignment).filter(
+        DeliveryAssignment.id == assignment_id,
+        DeliveryAssignment.driver_id == user.id,
+    ).with_for_update().first()
+
+    if assignment is None or assignment.status != "OFFERED":
+        raise HTTPException(400, "Đề nghị giao hàng đã hết hạn hoặc đã được xử lý")
+
+    assignment.status = "REJECTED"
     db.commit()
-    background_tasks.add_task(run_auto_dispatch_loop, sub.id, SessionLocal)
-    return {"message": "Hệ thống đang quét lại tài xế!"}
+    return {"message": "Tài xế đã từ chối chuyến. Hệ thống sẽ tìm tài xế khác."}
+
+
+@app.post("/api/v1/orders/{order_id}/retry-dispatch")
+def retry_dispatch(
+    order_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    order = lock_order(db, order_id)
+    require_customer(user, order.customer_id)
+    sub = find_sub_order(db, order.id)
+    if sub is None:
+        raise HTTPException(404, "Không tìm thấy đơn của nhà hàng")
+    if (
+        order.status not in ("PREPARING", "READY")
+        or sub.status not in ("PREPARING", "READY")
+        or sub.dispatch_status != "FAILED"
+    ):
+        raise HTTPException(400, "Đơn hàng không ở trạng thái thiếu tài xế")
+
+    sub.dispatch_status = "SEARCHING"
+    sub_id = sub.id
+    db.commit()
+
+    background_tasks.add_task(run_auto_dispatch_loop, sub_id, SessionLocal)
+    return {"message": "Hệ thống đang tìm lại tài xế!"}
+
 
 @app.post("/api/v1/orders/{order_id}/complete")
-def complete_delivery(order_id: str, db: Session = Depends(get_db)):
-    order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn")
-    # Chỉ hoàn tất đơn đang giao
+def complete_delivery(order_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    require_role(user, "DRIVER")
+    order = lock_order(db, order_id)
     if order.status != "DELIVERING":
-        raise HTTPException(status_code=400, detail="Chỉ hoàn tất được đơn đang giao")
+        raise HTTPException(400, "Chỉ hoàn tất được đơn đang giao")
 
-    pay = db.query(Payment).filter(Payment.order_id == order_id).first()
-    sub = db.query(SubOrder).filter(SubOrder.order_id == order_id).first()
+    sub = find_sub_order(db, order.id)
+    assignment = db.query(DeliveryAssignment).filter(
+        DeliveryAssignment.sub_order_id == (sub.id if sub else None),
+        DeliveryAssignment.driver_id == user.id,
+        DeliveryAssignment.status == "ACCEPTED",
+    ).first()
+    if assignment is None:
+        raise HTTPException(404, "Không tìm thấy chuyến giao của bạn")
+
+    payment = db.query(Payment).filter(Payment.order_id == order.id).first()
 
     order.status = "COMPLETED"
     if sub:
         sub.status = "COMPLETED"
-        # Giải phóng tài xế để nhận đơn mới
         db.query(DeliveryAssignment).filter(
             DeliveryAssignment.sub_order_id == sub.id,
-            DeliveryAssignment.status == "ACCEPTED"
-        ).update({"status": "COMPLETED"})
-    if pay:
-        pay.status = "SUCCESS"
+            DeliveryAssignment.status == "ACCEPTED",
+        ).update({"status": "COMPLETED"}, synchronize_session=False)
+
+    if payment and payment.method == "COD":
+        payment.status = "SUCCESS"
+
     db.commit()
-    return {"message": "Giao hàng hoàn tất & Đã đối soát thanh toán!"}
+    return {"message": "Giao hàng hoàn tất"}
+
+
+@app.post("/api/v1/orders/{order_id}/mock-payment/{action}")
+def update_mock_payment(
+    order_id: str,
+    action: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if action == "confirm":
+        require_role(user, "CUSTOMER")
+        order_status, before, after = "PENDING", "PENDING", "SUCCESS"
+    elif action == "refund":
+        require_role(user, "ADMIN")
+        order_status, before, after = "CANCELLED", "REFUND_PROCESSING", "REFUNDED"
+    else:
+        raise HTTPException(404, "Không tìm thấy thao tác thanh toán")
+
+    order = lock_order(db, order_id)
+    if action == "confirm":
+        require_customer(user, order.customer_id)
+
+    payment = db.query(Payment).filter(
+        Payment.order_id == order.id,
+        Payment.method == "ONLINE",
+    ).first()
+
+    if payment is None:
+        raise HTTPException(404, "Không tìm thấy giao dịch chuyển khoản")
+    if order.status != order_status or payment.status not in (before, after):
+        raise HTTPException(409, "Trạng thái giao dịch không cho phép thao tác này")
+    if payment.status != after:
+        payment.status = after
+        db.commit()
+
+    return {"payment_status": after}
