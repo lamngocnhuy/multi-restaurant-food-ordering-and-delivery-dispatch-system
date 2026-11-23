@@ -3,6 +3,8 @@ from typing import Optional
 
 # 1. Bước mẫu kiểm tra dữ liệu khi Thêm món vào giỏ hàng (REQ-4 -> REQ-9, BR04)
 class AddToCartForm(BaseModel):
+    size: str = Field(default="REGULAR", max_length=20)
+    topping: str = Field(default="NONE", max_length=20)
     customer_id : str
     food_id : str
     quantity : int = Field(gt=0, description="Số lượng món phải lớn hơn 0 (BR04)")

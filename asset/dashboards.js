@@ -40,7 +40,7 @@
       let visible = 0;
       for (const card of cards) {
         const isCurrent = Boolean(card.querySelector(
-          '[data-action="driver-accept"], [data-action="driver-reject"], [data-action="complete"]'
+          '[data-action="driver-accept"], [data-action="driver-reject"], [data-action="pickup"], [data-action="complete"]'
         ));
         const show = selected === "current" ? isCurrent : !isCurrent;
 

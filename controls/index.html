@@ -6,13 +6,21 @@
   <title>Food Dispatch System</title>
   <link rel="stylesheet" href="/static/forms.css">
   <script src="/static/forms.js" defer></script>
+  <script src="/static/restaurant-menu.js" defer></script>
   <script src="/static/dashboards.js" defer></script>
   <script src="/static/driver-availability.js" defer></script>
+  <script src="/static/driver-countdown.js" defer></script>
   <script src="/static/admin-report.js" defer></script>
+  <script src="/static/restaurant-report.js" defer></script>
   <link
     rel="stylesheet"
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
   >
+  <script src="/static/driver-countdown.js" defer></script>
+  <script src="/static/admin-users.js" defer></script>
+  <script src="/static/order-reviews.js" defer></script>
+  <script src="/static/restaurant-reviews.js" defer></script>
+  <script src="/includes/ui.js"></script>
 </head>
 <body class="bg-light">
   <header class="bg-dark shadow-sm">
@@ -68,8 +76,16 @@
             <div class="flex-grow-1" style="max-width: 360px;">
               <label class="visually-hidden" for="searchInput">Tìm món</label>
               <input id="searchInput" type="search" class="form-control"
-                     placeholder="Tìm món (VD: Phở, Cơm)…" disabled>
+                     placeholder="Tìm món hoặc tên nhà hàng…" disabled>
             </div>
+          </div>
+          <div class="mb-3">
+            <label for="menuCategory" class="visually-hidden">Nhóm thực đơn</label>
+            <select id="menuCategory" class="form-select w-auto">
+              <option value="">Tất cả</option>
+              <option value="FOOD">Món ăn</option>
+              <option value="DRINK">Đồ uống</option>
+            </select>
           </div>
           <div id="menuList" class="row g-3">
             <p class="text-muted" role="status">Đang kết nối…</p>
@@ -179,9 +195,6 @@
   <script>
     "use strict";
 
-    const byId = id => document.getElementById(id);
-    const money = new Intl.NumberFormat("vi-VN");
-    const formatMoney = amount => money.format(amount) + " VNĐ";
     const DELIVERY_FEE = 15000;
     const FOOD_IMAGES = new Map([
       ["Phở Bò Tái Nạm", "/static/phobo.png"],
@@ -238,6 +251,7 @@
     let cartHasItems = false;
     let checkoutBusy = false;
     let pendingFoodId = null;
+    let pendingFoodOptions = null;
     let ordersRequest;
     let orderActionBusy = false;
 
@@ -245,15 +259,7 @@
     const resetModal = new bootstrap.Modal(modalElement);
     const orderLists = document.querySelectorAll(".order-list");
 
-    function escapeHtml(value) {
-      return String(value ?? "").replace(/[&<>"']/g, character => ({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-      })[character]);
-    }
 
-    function label(labels, code) {
-      return Object.hasOwn(labels, code) ? labels[code] : (code || "—");
-    }
 
     function showNotice(message, type = "success") {
       byId("noticeText").textContent = message;
@@ -302,7 +308,14 @@
       image.addEventListener("error", () => {
         image.src = FALLBACK_IMAGE;
       }, { once: true });
-      image.src = FOOD_IMAGES.get(name) || url || FALLBACK_IMAGE;
+      const defaultModelImage =
+        "https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=400";
+      const savedUrl = typeof url === "string" ? url.trim() : "";
+      const sampleImage = FOOD_IMAGES.get(name);
+
+      image.src = savedUrl && savedUrl !== defaultModelImage
+        ? savedUrl
+        : sampleImage || savedUrl || FALLBACK_IMAGE;
     }
 
     function syncControls() {
@@ -314,7 +327,7 @@
         button.disabled = blocked || button.dataset.limit === "true";
       });
       byId("menuList").querySelectorAll("[data-add]").forEach(button => {
-        button.disabled = blocked;
+        button.disabled = blocked || button.dataset.soldOut === "true";
       });
       document.querySelectorAll(".order-list [data-action]").forEach(button => {
         button.disabled = orderActionBusy;
@@ -404,7 +417,9 @@
       box.innerHTML = '<p class="text-muted" role="status">Đang tải thực đơn…</p>';
 
       try {
-        const items = await api(`/api/v1/menu?keyword=${encodeURIComponent(keyword)}`, {
+        const category = byId("menuCategory").value;
+        const params = new URLSearchParams({ keyword, category });
+        const items = await api(`/api/v1/menu?${params}`, {
           signal: request.signal
         });
         if (request.signal.aborted) return;
@@ -432,7 +447,21 @@
             </article>
           `;
           setFoodImage(card.querySelector("img"), item.name, item.image_url);
-          card.querySelector("button").addEventListener("click", () => addToCart(item.id));
+          const rating = item.restaurant_rating;
+          if (rating && rating.count > 0) {
+            const summary = document.createElement("p");
+            summary.className = "small text-muted mb-2";
+            const score = Number(rating.average).toLocaleString("vi-VN");
+            summary.textContent = `${score}/5 sao của quán · ${rating.count} lượt`;
+            card.querySelector(".card-body").prepend(summary);
+          }
+          const addButton = card.querySelector("button");
+          if (item.status === "OUT_OF_STOCK") {
+            addButton.dataset.soldOut = "true";
+            addButton.disabled = true;
+            addButton.textContent = "Hết món";
+          }
+          addButton.addEventListener("click", () => openFoodOptions(item));
           return card;
         }));
         syncControls();
@@ -513,7 +542,14 @@
 
           controls.dataset.cartItemId = item.id;
           const content = document.createElement("div");
-          content.append(row, controls);
+          content.append(row);
+          if (item.options_note) {
+            const details = document.createElement("p");
+            details.className = "small text-muted mb-1 text-break";
+            details.textContent = item.options_note;
+            content.append(details);
+          }
+          content.append(controls);
           content.className = "mb-3";
           return content;
         }));
@@ -536,7 +572,95 @@
       }
     }
 
-    async function addToCart(foodId, forceReset = false) {
+    function openFoodOptions(item) {
+      if (!customerId || cartBusy || checkoutBusy || pendingFoodId !== null) return;
+
+      const dialog = document.createElement("dialog");
+      dialog.className = "border rounded-4 shadow p-0";
+      dialog.style.width = "min(92vw, 440px)";
+      dialog.setAttribute("aria-labelledby", "foodOptionsTitle");
+      dialog.innerHTML = `
+        <form class="p-4">
+          <h2 id="foodOptionsTitle" class="h5 mb-3"></h2>
+          <div class="mb-3" data-sizes>
+            <label for="foodSize" class="form-label">Kích cỡ</label>
+            <select id="foodSize" class="form-select"></select>
+          </div>
+          <div class="mb-3" data-toppings>
+            <label for="foodTopping" class="form-label">Topping</label>
+            <select id="foodTopping" class="form-select"></select>
+          </div>
+          <div class="mb-3">
+            <label for="foodQuantity" class="form-label">Số lượng</label>
+            <input id="foodQuantity" class="form-control" type="number"
+                   value="1" min="1" max="99" step="1" required>
+          </div>
+          <div class="mb-3">
+            <label for="foodNote" class="form-label">Ghi chú cho bếp</label>
+            <textarea id="foodNote" class="form-control" maxlength="200" rows="2"></textarea>
+          </div>
+          <p class="fw-bold" data-price aria-live="polite"></p>
+          <div class="d-flex gap-2 justify-content-end">
+            <button type="button" class="btn btn-outline-secondary" data-cancel>Hủy</button>
+            <button type="submit" class="btn btn-dark">Thêm vào giỏ</button>
+          </div>
+        </form>`;
+
+      const form = dialog.querySelector("form");
+      const sizes = dialog.querySelector("#foodSize");
+      const toppings = dialog.querySelector("#foodTopping");
+      const quantity = dialog.querySelector("#foodQuantity");
+      const note = dialog.querySelector("#foodNote");
+      const price = dialog.querySelector("[data-price]");
+
+      function fill(select, choices, fallback) {
+        const values = Array.isArray(choices) && choices.length ? choices : [fallback];
+        select.replaceChildren(...values.map(choice => {
+          const text = choice.extra
+            ? `${choice.label} (+${formatMoney(choice.extra)})`
+            : choice.label;
+          const option = new Option(text, choice.id);
+          option.dataset.extra = String(choice.extra);
+          return option;
+        }));
+        select.parentElement.hidden = values.length === 1;
+      }
+
+      function showTotal() {
+        const unitPrice = Number(item.price)
+          + Number(sizes.selectedOptions[0].dataset.extra)
+          + Number(toppings.selectedOptions[0].dataset.extra);
+        price.textContent = quantity.validity.valid
+          ? `Tạm tính: ${formatMoney(unitPrice * quantity.valueAsNumber)}`
+          : "";
+      }
+
+      dialog.querySelector("h2").textContent = item.name;
+      fill(sizes, item.options?.sizes, { id: "REGULAR", label: "Size thường", extra: 0 });
+      fill(toppings, item.options?.toppings, { id: "NONE", label: "Không thêm topping", extra: 0 });
+      form.addEventListener("input", showTotal);
+      form.addEventListener("change", showTotal);
+      dialog.querySelector("[data-cancel]").addEventListener("click", () => dialog.close());
+      dialog.addEventListener("close", () => dialog.remove(), { once: true });
+
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        const options = {
+          quantity: quantity.valueAsNumber,
+          size: sizes.value,
+          topping: toppings.value,
+          options_note: note.value.trim()
+        };
+        dialog.close();
+        void addToCart(item.id, false, options);
+      });
+
+      document.body.append(dialog);
+      showTotal();
+      dialog.showModal();
+    }
+
+    async function addToCart(foodId, forceReset = false, options = {}) {
       if (!customerId || cartBusy || checkoutBusy || (!forceReset && pendingFoodId !== null)) return;
 
       cartBusy = true;
@@ -547,7 +671,10 @@
         await postJson("/api/v1/cart/items", {
           customer_id: customerId,
           food_id: foodId,
-          quantity: 1,
+          quantity: options.quantity ?? 1,
+          size: options.size ?? "REGULAR",
+          topping: options.topping ?? "NONE",
+          options_note: options.options_note ?? "",
           force_reset_cart: forceReset
         });
         if (forceReset) {
@@ -559,6 +686,7 @@
       } catch (error) {
         if (error.status === 409 && !forceReset) {
           pendingFoodId = foodId;
+          pendingFoodOptions = options;
           resetModal.show();
         } else if (forceReset) {
           byId("resetError").textContent = error.message;
@@ -649,11 +777,65 @@
         <ul class="list-group list-group-flush small mb-2 mt-2">
           ${items.map(item => `
             <li class="list-group-item px-0 d-flex justify-content-between gap-2">
-              <span><strong>${escapeHtml(item.quantity)} ×</strong> ${escapeHtml(item.name)}</span>
+              <span>
+                <strong>${escapeHtml(item.quantity)} ×</strong> ${escapeHtml(item.name)}
+                ${item.options_note
+                  ? `<span class="d-block text-muted text-break">${escapeHtml(item.options_note)}</span>`
+                  : ""}
+              </span>
               <span class="text-nowrap">${formatMoney(item.line_total)}</span>
             </li>
           `).join("")}
         </ul>
+      `;
+    }
+
+    function renderCustomerProgress(order) {
+      if (["CANCELLED", "CANCELED"].includes(order.status)) {
+        return '<p class="small text-muted mt-2 mb-0">Đơn đã hủy.</p>';
+      }
+
+      const steps = [
+        "Chờ xác nhận", "Đang chế biến", "Sẵn sàng giao", "Đang giao", "Đã giao"
+      ];
+      const stages = new Map([
+        ["PENDING", 0],
+        ["CONFIRMED", 1],
+        ["PREPARING", 1],
+        ["READY", 2],
+        ["DELIVERING", 3],
+        ["COMPLETED", 4],
+        ["DELIVERED", 4]
+      ]);
+      const current = stages.get(order.status);
+      if (current === undefined) return "";
+
+      let note = "";
+      if (
+        order.status === "PENDING" && order.payment_method === "ONLINE"
+        && ["PENDING", "UNPAID"].includes(order.payment_status)
+      ) {
+        note = "Đơn đang chờ bạn xác nhận thanh toán mô phỏng.";
+      } else if (order.dispatch_status === "FAILED" && ["PREPARING", "READY"].includes(order.status)) {
+        note = "Chưa có tài xế khả dụng. Bạn có thể yêu cầu tìm lại bên dưới.";
+      } else if (order.status === "READY" && order.dispatch_status === "SEARCHING") {
+        note = "Món đã sẵn sàng. Hệ thống đang tìm tài xế.";
+      } else if (order.status === "READY" && order.dispatch_status === "ASSIGNED") {
+        note = "Tài xế đã nhận chuyến và đang đến lấy món.";
+      }
+
+      return `
+        <ol class="d-flex flex-wrap gap-2 list-unstyled small mt-3 mb-2"
+            aria-label="Tiến độ đơn hàng">
+          ${steps.map((step, index) => {
+            const style = index === current
+              ? "text-bg-primary"
+              : index < current ? "text-bg-success" : "text-bg-light";
+            const currentStep = index === current ? ' aria-current="step"' : "";
+            return `<li class="badge ${style}"${currentStep}>${step}</li>`;
+          }).join("")}
+        </ol>
+        ${note ? `<p class="small text-muted mb-2">${note}</p>` : ""}
       `;
     }
 
@@ -677,6 +859,13 @@
 
       setContent("customerOrders", orders.map(order => orderCard(order, `
         <div class="small text-break">Giao tới: ${escapeHtml(order.delivery_address)}</div>
+        ${renderCustomerProgress(order)}
+        ${["COMPLETED", "DELIVERED"].includes(order.status) ? `
+          <button type="button" class="btn btn-sm btn-outline-dark mb-2"
+                  data-review-order="${escapeHtml(order.order_id)}">
+            Đánh giá
+          </button>
+        ` : ""}
         ${renderOrderItems(order.items)}
         <div class="small mt-1"><strong>${formatMoney(order.grand_total)}</strong> · ${paymentSummary(order)}</div>
         ${order.dispatch_status ? `
@@ -710,12 +899,20 @@
         const buttons = canAccept
           ? orderButton("driver-accept", order.assignment_id, "Nhận chuyến", "btn-warning")
             + orderButton("driver-reject", order.assignment_id, "Từ chối chuyến", "btn-outline-danger")
-          : order.status === "DELIVERING"
-            ? orderButton("complete", order.order_id, "Xác nhận đã giao", "btn-success")
-            : "";
+          : order.status === "READY" && order.assignment_status === "ACCEPTED"
+            ? orderButton("pickup", order.order_id, "Đã lấy hàng", "btn-primary")
+            : order.status === "DELIVERING" && order.assignment_status === "ACCEPTED"
+              ? orderButton("complete", order.order_id, "Xác nhận đã giao", "btn-success")
+              : "";
         return orderCard(order, `
           <div class="small text-break">Địa chỉ giao: ${escapeHtml(order.delivery_address)}</div>
           <div class="small mt-1">Điều phối: ${escapeHtml(label(dispatchLabels, order.assignment_status))}</div>
+          ${canAccept && order.assignment_expires_at ? `
+            <p class="small fw-semibold mt-2 mb-0"
+               data-offer-expires="${escapeHtml(order.assignment_expires_at)}">
+              Đang tính thời gian còn lại…
+            </p>
+          ` : ""}
         `, buttons);
       }).join("") || empty);
 
@@ -800,6 +997,7 @@
         "driver-accept": `/api/v1/dispatch/${id}/accept`,
         "driver-reject": `/api/v1/dispatch/${id}/reject`,
         "retry-dispatch": `/api/v1/orders/${id}/retry-dispatch`,
+        "pickup": `/api/v1/orders/${id}/pickup`,
         "complete": `/api/v1/orders/${id}/complete`
       };
 
@@ -821,6 +1019,7 @@
           "retry-dispatch": "Hệ thống đang tìm lại tài xế.",
           "confirm-payment": "Đã xác nhận thanh toán mô phỏng.",
           "confirm-refund": "Đã xác nhận hoàn tiền mô phỏng.",
+          "pickup": "Đã lấy hàng. Đơn đang được giao.",
           "complete": "Đã xác nhận giao hàng."
         }[action];
         showNotice(message);
@@ -853,7 +1052,7 @@
     });
     byId("checkoutForm").addEventListener("submit", checkout);
     byId("confirmReset").addEventListener("click", () => {
-      if (pendingFoodId !== null) void addToCart(pendingFoodId, true);
+      if (pendingFoodId !== null) void addToCart(pendingFoodId, true, pendingFoodOptions ?? {});
     });
 
     modalElement.addEventListener("hide.bs.modal", event => {
@@ -861,6 +1060,7 @@
     });
     modalElement.addEventListener("hidden.bs.modal", () => {
       pendingFoodId = null;
+      pendingFoodOptions = null;
       byId("resetError").classList.add("d-none");
       syncControls();
     });
@@ -893,6 +1093,12 @@
     });
 
     byId("restaurantOrderFilter").addEventListener("change", () => renderOrders(lastOrders));
+
+    byId("menuCategory").addEventListener("change", () => {
+      menuRequest?.abort();
+      clearTimeout(searchTimer);
+      void loadMenu();
+    });
 
     void initialize();
   </script>

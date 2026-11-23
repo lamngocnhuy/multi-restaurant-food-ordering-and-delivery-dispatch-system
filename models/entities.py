@@ -90,6 +90,7 @@ class OrderItem(Base):
     quantity = Column(Integer, nullable=False)
     unit_price = Column(Float, nullable=False)
     total_price = Column(Float, nullable=False)
+    options_note = Column(Text, nullable=True)
 
 # 9. Bảng Phân công & Điều phối Tài xế (ST-02)
 class DeliveryAssignment(Base):
@@ -109,3 +110,20 @@ class Payment(Base):
     method = Column(String, nullable=False)     # COD, ONLINE
     amount = Column(Float, nullable=False)
     status = Column(String, default="PENDING")  # PENDING, SUCCESS, REFUND_PROCESSING, REFUNDED
+
+ 
+class OrderReview(Base):
+    __tablename__ = "order_reviews"
+
+    order_id = Column(String, ForeignKey("orders.id"), primary_key=True)
+    restaurant_stars = Column(Integer, nullable=False)
+    driver_stars = Column(Integer, nullable=True)
+    comment = Column(Text, nullable=False, default="")
+
+
+class OrderReviewReply(Base):
+    __tablename__ = "order_review_replies"
+
+    order_id = Column(String, ForeignKey("order_reviews.order_id"), primary_key=True)
+    restaurant_id = Column(String, ForeignKey("restaurants.id"), primary_key=True)
+    message = Column(Text, nullable=False)

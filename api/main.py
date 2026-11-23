@@ -1,10 +1,14 @@
 from api.auth import get_current_user, router as auth_router
+from api.order_reviews import (
+    restaurant_rating_summary,
+    router as order_reviews_router,
+)
 from api.admin_users import router as admin_users_router
 from api.driver_availability import router as driver_availability_router
 from datetime import timedelta
 from pathlib import Path
 from threading import Lock
-
+from api.restaurant_menu import router as restaurant_menu_router
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -35,8 +39,42 @@ from services.dispatch_service import (
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSET_DIR = ROOT / "asset"
+INCLUDES_DIR = ROOT / "includes"
 INDEX_FILE = ROOT / "controls" / "index.html"
 DELIVERY_FEE = 15_000
+
+REGULAR_SIZE = {"id": "REGULAR", "label": "Size thường", "extra": 0}
+LARGE_SIZE = {"id": "LARGE", "label": "Size lớn", "extra": 10000}
+NO_TOPPING = {"id": "NONE", "label": "Không thêm topping", "extra": 0}
+PEARLS = {"id": "PEARLS", "label": "Trân châu", "extra": 5000}
+
+
+def food_options(category):
+    if category == "DRINK":
+        return {"sizes": [REGULAR_SIZE, LARGE_SIZE], "toppings": [NO_TOPPING, PEARLS]}
+    return {"sizes": [REGULAR_SIZE], "toppings": [NO_TOPPING]}
+
+
+def price_food_options(food, form):
+    choices = food_options(food.category)
+    size = next((item for item in choices["sizes"] if item["id"] == form.size), None)
+    topping = next((item for item in choices["toppings"] if item["id"] == form.topping), None)
+    if size is None or topping is None:
+        raise HTTPException(400, "Tùy chọn không áp dụng cho món này")
+
+    note = (form.options_note or "").strip()
+    if len(note) > 200:
+        raise HTTPException(400, "Ghi chú tối đa 200 ký tự")
+
+    details = []
+    if size["extra"]:
+        details.append(size["label"])
+    if topping["extra"]:
+        details.append(topping["label"])
+    if note:
+        details.append(f"Ghi chú: {note}")
+
+    return food.price + size["extra"] + topping["extra"], " · ".join(details)
 SEED_LOCK = Lock()
 
 Base.metadata.create_all(bind=engine)
@@ -56,10 +94,14 @@ app.add_middleware(
 if ASSET_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=ASSET_DIR), name="static")
 
+app.mount("/includes", StaticFiles(directory=INCLUDES_DIR), name="includes")
+
 
 app.include_router(auth_router)
+app.include_router(order_reviews_router)
 app.include_router(admin_users_router)
 app.include_router(driver_availability_router)
+app.include_router(restaurant_menu_router)
 
 
 @app.get("/")
@@ -183,20 +225,26 @@ def get_menu(
     )
     keyword = keyword.strip()
     if keyword:
-        query = query.filter(FoodItem.name.icontains(keyword, autoescape=True))
+        query = query.filter(
+            FoodItem.name.icontains(keyword, autoescape=True)
+            | Restaurant.name.icontains(keyword, autoescape=True)
+        )
     if category:
         query = query.filter(FoodItem.category == category)
 
+    ratings = restaurant_rating_summary(db)
     return [
         {
             "id": food.id,
             "name": food.name,
             "price": food.price,
             "category": food.category,
+            "options": food_options(food.category),
             "status": food.status,
             "image_url": food.image_url,
             "restaurant_id": restaurant.id,
             "restaurant_name": restaurant.name,
+            "restaurant_rating": ratings.get(restaurant.id),
         }
         for food, restaurant in query.order_by(Restaurant.name, FoodItem.name).all()
     ]
@@ -217,14 +265,16 @@ def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db), user: User =
     require_customer(user, form.customer_id)
     if not 1 <= form.quantity <= 99:
         raise HTTPException(400, "Số lượng phải từ 1 đến 99")
-    if form.size_extra < 0 or form.topping_extra < 0:
-        raise HTTPException(400, "Phụ phí không hợp lệ")
+    if form.size_extra != 0 or form.topping_extra != 0:
+        raise HTTPException(400, "Vui lòng gửi mã tùy chọn để hệ thống tính phụ phí")
 
     lock_customer(db, form.customer_id)
 
     food = db.query(FoodItem).filter(FoodItem.id == form.food_id).first()
     if food is None:
         raise HTTPException(404, "Món ăn không tồn tại")
+    if food.status == "OUT_OF_STOCK":
+        raise HTTPException(400, f"Món {food.name} đã hết")
 
     cart = db.query(Cart).filter(Cart.customer_id == form.customer_id).first()
     if cart is None:
@@ -247,7 +297,7 @@ def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db), user: User =
             item_query.delete(synchronize_session="fetch")
 
     cart.restaurant_id = food.restaurant_id
-    unit_price = food.price + form.size_extra + form.topping_extra
+    unit_price, options_note = price_food_options(food, form)
     item = item_query.filter(CartItem.food_id == food.id).first()
 
     if item is None:
@@ -256,15 +306,18 @@ def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db), user: User =
             food_id=food.id,
             quantity=form.quantity,
             unit_price=unit_price,
-            options_note=form.options_note,
+            options_note=options_note,
         ))
     else:
         if item.quantity + form.quantity > 99:
             raise HTTPException(400, "Mỗi món chỉ được có tối đa 99 phần trong giỏ")
 
+        if (item.options_note or "") != options_note:
+            raise HTTPException(
+                400, "Món đã có tùy chọn khác trong giỏ. Hãy xóa dòng cũ rồi thêm lại."
+            )
         item.quantity += form.quantity
         item.unit_price = unit_price
-        item.options_note = form.options_note
 
     db.flush()
     total = sum(row.quantity * row.unit_price for row in item_query.all())
@@ -360,6 +413,13 @@ def checkout(form: CheckoutForm, db: Session = Depends(get_db), user: User = Dep
     if not items:
         raise HTTPException(400, "Giỏ hàng trống")
 
+    unavailable = db.query(FoodItem.name).filter(
+        FoodItem.id.in_([item.food_id for item in items]),
+        FoodItem.status == "OUT_OF_STOCK",
+    ).first()
+    if unavailable:
+        raise HTTPException(409, f"Món {unavailable[0]} đã hết. Vui lòng xóa món khỏi giỏ.")
+
     subtotal = sum(item.quantity * item.unit_price for item in items)
     grand_total = subtotal + DELIVERY_FEE
 
@@ -388,6 +448,7 @@ def checkout(form: CheckoutForm, db: Session = Depends(get_db), user: User = Dep
             quantity=item.quantity,
             unit_price=item.unit_price,
             total_price=item.quantity * item.unit_price,
+            options_note=item.options_note,
         ))
         db.delete(item)
 
@@ -451,6 +512,7 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
                 "quantity": item.quantity,
                 "unit_price": item.unit_price,
                 "line_total": item.total_price,
+                "options_note": item.options_note,
             })
 
     output = []
@@ -480,6 +542,15 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
             "payment_status": payment.status if payment else "PENDING",
             "assignment_id": assignment.id if assignment else None,
             "assignment_status": assignment.status if assignment else "NONE",
+            "assignment_expires_at": (
+                (assignment.assigned_at + timedelta(
+                    seconds=DISPATCH_TIMEOUT_SECONDS
+                )).isoformat(timespec="milliseconds") + "Z"
+                if assignment
+                and assignment.status == "OFFERED"
+                and assignment.assigned_at is not None
+                else None
+            ),
         })
 
     return output
@@ -630,12 +701,19 @@ def driver_accept_trip(assignment_id: str, db: Session = Depends(get_db), user: 
     ):
         raise HTTPException(409, "Đề nghị giao hàng đã hết hạn")
 
+    existing = db.query(DeliveryAssignment.id).filter(
+        DeliveryAssignment.sub_order_id == sub.id,
+        DeliveryAssignment.status == "ACCEPTED",
+    ).first()
+    if existing is not None:
+        raise HTTPException(409, "Đơn đã có tài xế nhận chuyến")
+
     assignment.status = "ACCEPTED"
     sub.dispatch_status = "ASSIGNED"
-    sub.status = "DELIVERING"
-    order.status = "DELIVERING"
+    sub.status = "READY"
+    order.status = "READY"
     db.commit()
-    return {"message": "Tài xế đã nhận chuyến và đang giao hàng!"}
+    return {"message": "Đã nhận chuyến. Hãy xác nhận sau khi lấy hàng."}
 
 
 @app.post("/api/v1/dispatch/{assignment_id}/reject")
@@ -678,6 +756,35 @@ def retry_dispatch(
 
     background_tasks.add_task(run_auto_dispatch_loop, sub_id, SessionLocal)
     return {"message": "Hệ thống đang tìm lại tài xế!"}
+
+
+@app.post("/api/v1/orders/{order_id}/pickup")
+def confirm_pickup(
+    order_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_role(user, "DRIVER")
+    order = lock_order(db, order_id)
+    sub = find_sub_order(db, order.id)
+
+    assignment = db.query(DeliveryAssignment.id).filter(
+        DeliveryAssignment.sub_order_id == (sub.id if sub else None),
+        DeliveryAssignment.driver_id == user.id,
+        DeliveryAssignment.status == "ACCEPTED",
+    ).first()
+    if assignment is None:
+        raise HTTPException(404, "Không tìm thấy chuyến giao của bạn")
+
+    if order.status == "DELIVERING" and sub.status == "DELIVERING":
+        return {"message": "Chuyến đã được xác nhận lấy hàng"}
+    if order.status != "READY" or sub.status != "READY":
+        raise HTTPException(409, "Đơn chưa ở trạng thái có thể lấy hàng")
+
+    sub.status = "DELIVERING"
+    order.status = "DELIVERING"
+    db.commit()
+    return {"message": "Đã lấy hàng. Đơn đang được giao."}
 
 
 @app.post("/api/v1/orders/{order_id}/complete")
