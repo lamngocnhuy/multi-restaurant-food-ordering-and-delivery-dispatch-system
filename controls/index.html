@@ -21,6 +21,7 @@
   <script src="/static/order-reviews.js" defer></script>
   <script src="/static/restaurant-reviews.js" defer></script>
   <script src="/includes/ui.js"></script>
+  <script src="/static/partner-applications.js" defer></script>
 </head>
 <body class="bg-light">
   <header class="bg-dark shadow-sm">
@@ -87,6 +88,17 @@
               <option value="DRINK">Đồ uống</option>
             </select>
           </div>
+          <div class="mb-3">
+            <label for="menuRestaurant" class="form-label small fw-semibold">Nhà hàng</label>
+            <select id="menuRestaurant" class="form-select w-auto mw-100">
+              <option value="">Tất cả nhà hàng</option>
+            </select>
+            <p id="restaurantFilterMessage" class="small text-danger mt-1 mb-0" role="status"></p>
+            <button id="retryRestaurantFilter" type="button"
+                    class="btn btn-sm btn-outline-dark mt-1" hidden>
+              Tải lại danh sách quán
+            </button>
+          </div>
           <div id="menuList" class="row g-3">
             <p class="text-muted" role="status">Đang kết nối…</p>
           </div>
@@ -128,7 +140,7 @@
                   </select>
                 </div>
                 <button id="checkoutButton" type="submit" class="btn btn-dark w-100 fw-bold" disabled>
-                  Đặt hàng ngay
+                  Đặt các giỏ đã chọn
                 </button>
               </form>
             </div>
@@ -172,30 +184,10 @@
     </section>
   </main>
 
-  <div id="req9Modal" class="modal fade" tabindex="-1" aria-labelledby="req9Title">
-    <div class="modal-dialog">
-      <div class="modal-content">
-        <div class="modal-header bg-warning">
-          <h2 id="req9Title" class="modal-title h5">Đổi nhà hàng?</h2>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button>
-        </div>
-        <div class="modal-body">
-          Mỗi giỏ chỉ chứa món của một nhà hàng. Bạn có muốn xóa giỏ hiện tại để thêm món mới?
-          <p id="resetError" class="text-danger d-none mt-3 mb-0" role="alert"></p>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Giữ giỏ cũ</button>
-          <button id="confirmReset" type="button" class="btn btn-danger">Xóa giỏ cũ và thêm món</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     "use strict";
 
-    const DELIVERY_FEE = 15000;
     const FOOD_IMAGES = new Map([
       ["Phở Bò Tái Nạm", "/static/phobo.png"],
       ["Phở Đặc Biệt Bát Đá", "/static/phobatda.jpg"],
@@ -210,6 +202,7 @@
       PREPARING: "Đang chế biến",
       READY: "Sẵn sàng giao",
       DELIVERING: "Đang giao",
+      DELIVERY_FAILED: "Giao thất bại",
       COMPLETED: "Đã hoàn tất",
       DELIVERED: "Đã giao",
       CANCELED: "Đã hủy",
@@ -225,6 +218,8 @@
       SUCCESS: "Đã thanh toán",
       CANCELLED: "Đã hủy thanh toán",
       FAILED: "Thanh toán thất bại",
+      REFUND_REVIEW: "Chờ duyệt hoàn tiền",
+      REFUND_DENIED: "Từ chối hoàn tiền",
       REFUND_PROCESSING: "Đang xử lý hoàn tiền",
       REFUNDED: "Đã hoàn tiền"
     };
@@ -250,13 +245,11 @@
     let cartBusy = false;
     let cartHasItems = false;
     let checkoutBusy = false;
-    let pendingFoodId = null;
-    let pendingFoodOptions = null;
+    let cartGroups = [];
+    const cartSelection = new Map();
     let ordersRequest;
     let orderActionBusy = false;
 
-    const modalElement = byId("req9Modal");
-    const resetModal = new bootstrap.Modal(modalElement);
     const orderLists = document.querySelectorAll(".order-list");
 
 
@@ -319,10 +312,12 @@
     }
 
     function syncControls() {
-      const blocked = !customerId || cartBusy || checkoutBusy || pendingFoodId !== null;
+      const blocked = !customerId || cartBusy || checkoutBusy;
       byId("checkoutButton").disabled = blocked || !cartHasItems;
-      byId("checkoutButton").textContent = checkoutBusy ? "Đang gửi đơn…" : "Đặt hàng ngay";
-      byId("confirmReset").disabled = cartBusy;
+      byId("checkoutButton").textContent = checkoutBusy ? "Đang gửi đơn…" : "Đặt các giỏ đã chọn";
+      byId("cartItems").querySelectorAll("[data-cart-select]").forEach(checkbox => {
+        checkbox.disabled = blocked;
+      });
       byId("cartItems").querySelectorAll("[data-cart-quantity]").forEach(button => {
         button.disabled = blocked || button.dataset.limit === "true";
       });
@@ -353,7 +348,7 @@
         if (user.role === "CUSTOMER") {
           customerId = user.id;
           byId("searchInput").disabled = false;
-          await Promise.all([loadMenu(), loadCart()]);
+          await Promise.all([loadMenu(), loadCart(), loadRestaurantFilter()]);
         }
         void loadOrders();
         setInterval(loadOrders, 3000);
@@ -407,6 +402,38 @@
       }
     }
 
+    async function loadRestaurantFilter() {
+      const select = byId("menuRestaurant");
+      const message = byId("restaurantFilterMessage");
+      const retry = byId("retryRestaurantFilter");
+      retry.disabled = true;
+
+      try {
+        const restaurants = await api("/api/v1/restaurants");
+        if (!Array.isArray(restaurants)) {
+          throw new Error("Danh sách nhà hàng không hợp lệ.");
+        }
+
+        const selected = select.value;
+        select.replaceChildren(
+          new Option("Tất cả nhà hàng", ""),
+          ...restaurants.map(restaurant => new Option(restaurant.name, restaurant.id))
+        );
+        if (restaurants.some(restaurant => restaurant.id === selected)) {
+          select.value = selected;
+        } else if (selected) {
+          void loadMenu();
+        }
+        message.textContent = "";
+        retry.hidden = true;
+      } catch (error) {
+        message.textContent = "Chưa tải được danh sách quán. Bạn vẫn có thể tìm món.";
+        retry.hidden = false;
+      } finally {
+        retry.disabled = false;
+      }
+    }
+
     async function loadMenu() {
       menuRequest?.abort();
       const request = new AbortController();
@@ -419,6 +446,8 @@
       try {
         const category = byId("menuCategory").value;
         const params = new URLSearchParams({ keyword, category });
+        const restaurantId = byId("menuRestaurant").value;
+        if (restaurantId) params.set("restaurant_id", restaurantId);
         const items = await api(`/api/v1/menu?${params}`, {
           signal: request.signal
         });
@@ -456,10 +485,13 @@
             card.querySelector(".card-body").prepend(summary);
           }
           const addButton = card.querySelector("button");
-          if (item.status === "OUT_OF_STOCK") {
+          if (item.restaurant_status === "CLOSED" || item.status === "OUT_OF_STOCK") {
+            card.querySelector(".card").classList.add("menu-card-sold-out");
             addButton.dataset.soldOut = "true";
             addButton.disabled = true;
-            addButton.textContent = "Hết món";
+            addButton.textContent = item.restaurant_status === "CLOSED"
+              ? "Quán tạm đóng"
+              : "Hết món";
           }
           addButton.addEventListener("click", () => openFoodOptions(item));
           return card;
@@ -483,25 +515,43 @@
       byId("cartTotal").textContent = formatMoney(subtotal + fee);
     }
 
+    function selectedCartGroups() {
+      return cartGroups.filter(group => cartSelection.get(group.restaurant_id));
+    }
+
+    function updateSelectedCart() {
+      const selected = selectedCartGroups();
+      cartHasItems = selected.length > 0;
+      updateTotals(
+        selected.reduce((sum, group) => sum + Number(group.subtotal), 0),
+        selected.reduce((sum, group) => sum + Number(group.delivery_fee), 0)
+      );
+      syncControls();
+    }
+
     async function loadCart() {
       const box = byId("cartItems");
+      cartGroups = [];
       cartHasItems = false;
       syncControls();
 
       try {
         const cart = await api(`/api/v1/cart/${encodeURIComponent(customerId)}`);
-        if (!Array.isArray(cart?.items)) throw new Error("Dữ liệu giỏ hàng không hợp lệ.");
+        if (!Array.isArray(cart?.groups)) throw new Error("Dữ liệu giỏ hàng không hợp lệ.");
 
-        if (!cart.items.length) {
+        cartGroups = cart.groups;
+        const restaurantIds = new Set(cartGroups.map(group => group.restaurant_id));
+        for (const id of cartSelection.keys()) {
+          if (!restaurantIds.has(id)) cartSelection.delete(id);
+        }
+
+        if (!cartGroups.length) {
           box.textContent = "Giỏ hàng đang trống";
-          updateTotals(0, 0);
+          updateSelectedCart();
           return;
         }
 
-        const subtotal = Number(cart.total_amount);
-        if (!Number.isFinite(subtotal)) throw new Error("Tiền món không hợp lệ.");
-
-        box.replaceChildren(...cart.items.map(item => {
+        function renderItem(item) {
           const row = document.createElement("div");
           row.className = "d-flex align-items-center justify-content-between gap-2 mb-2 pb-2 border-bottom";
           row.innerHTML = `
@@ -523,7 +573,7 @@
           const quantity = Number(item.quantity);
           const actions = [
             { text: "−", label: "Giảm số lượng", quantity: quantity - 1, limited: quantity <= 1 },
-            { text: "+", label: "Tăng số lượng", quantity: quantity + 1, limited: quantity >= 99 },
+            { text: "+", label: "Tăng số lượng", quantity: quantity + 1, limited: quantity >= 99 || item.available === false },
             { text: "Xóa", label: "Xóa món", quantity: 0, limited: false }
           ];
 
@@ -543,6 +593,12 @@
           controls.dataset.cartItemId = item.id;
           const content = document.createElement("div");
           content.append(row);
+          if (item.available === false) {
+            const warning = document.createElement("p");
+            warning.className = "small text-danger mb-1";
+            warning.textContent = "Món chưa thể đặt. Bạn có thể xóa món hoặc bỏ chọn giỏ." ;
+            content.append(warning);
+          }
           if (item.options_note) {
             const details = document.createElement("p");
             details.className = "small text-muted mb-1 text-break";
@@ -552,9 +608,36 @@
           content.append(controls);
           content.className = "mb-3";
           return content;
+        }
+
+        box.replaceChildren(...cartGroups.map(group => {
+          const id = group.restaurant_id;
+          if (!cartSelection.has(id)) cartSelection.set(id, true);
+
+          const section = document.createElement("section");
+          section.dataset.cartGroup = id;
+          section.className = "border rounded p-2 mb-3";
+          section.innerHTML = `
+            <label class="d-flex align-items-start gap-2 mb-1">
+              <input type="checkbox" class="form-check-input" data-cart-select>
+              <strong></strong>
+            </label>
+            <p class="small text-muted mb-2" data-group-totals></p>`;
+          section.querySelector("strong").textContent = group.restaurant_name;
+          section.querySelector("[data-group-totals]").textContent =
+            `Tiền món ${formatMoney(group.subtotal)} · Giao hàng ${formatMoney(group.delivery_fee)}`;
+
+          const checkbox = section.querySelector("[data-cart-select]");
+          checkbox.checked = cartSelection.get(id);
+          checkbox.addEventListener("change", () => {
+            cartSelection.set(id, checkbox.checked);
+            updateSelectedCart();
+          });
+
+          section.append(...group.items.map(renderItem));
+          return section;
         }));
-        updateTotals(subtotal, DELIVERY_FEE);
-        cartHasItems = true;
+        updateSelectedCart();
       } catch (error) {
         box.innerHTML = `
           <p class="text-danger mb-2" role="alert">Không tải được giỏ hàng.</p>
@@ -573,7 +656,7 @@
     }
 
     function openFoodOptions(item) {
-      if (!customerId || cartBusy || checkoutBusy || pendingFoodId !== null) return;
+      if (!customerId || cartBusy || checkoutBusy) return;
 
       const dialog = document.createElement("dialog");
       dialog.className = "border rounded-4 shadow p-0";
@@ -652,7 +735,7 @@
           options_note: note.value.trim()
         };
         dialog.close();
-        void addToCart(item.id, false, options);
+        void addToCart(item.id, options);
       });
 
       document.body.append(dialog);
@@ -660,13 +743,11 @@
       dialog.showModal();
     }
 
-    async function addToCart(foodId, forceReset = false, options = {}) {
-      if (!customerId || cartBusy || checkoutBusy || (!forceReset && pendingFoodId !== null)) return;
+    async function addToCart(foodId, options = {}) {
+      if (!customerId || cartBusy || checkoutBusy) return;
 
       cartBusy = true;
-      byId("resetError").classList.add("d-none");
       syncControls();
-
       try {
         await postJson("/api/v1/cart/items", {
           customer_id: customerId,
@@ -674,28 +755,13 @@
           quantity: options.quantity ?? 1,
           size: options.size ?? "REGULAR",
           topping: options.topping ?? "NONE",
-          options_note: options.options_note ?? "",
-          force_reset_cart: forceReset
+          options_note: options.options_note ?? ""
         });
-        if (forceReset) {
-          byId("confirmReset").dataset.allowClose = "true";
-          resetModal.hide();
-          delete byId("confirmReset").dataset.allowClose;
-        }
         await loadCart();
       } catch (error) {
-        if (error.status === 409 && !forceReset) {
-          pendingFoodId = foodId;
-          pendingFoodOptions = options;
-          resetModal.show();
-        } else if (forceReset) {
-          byId("resetError").textContent = error.message;
-          byId("resetError").classList.remove("d-none");
-          await loadCart();
-        } else {
-          showNotice(`Chưa cập nhật được giỏ hàng. ${error.message}`, "danger");
-          await loadCart();
-        }
+        showNotice(`Chưa cập nhật được giỏ hàng. ${error.message}`, "danger");
+        byId("notice").focus();
+        await loadCart();
       } finally {
         cartBusy = false;
         syncControls();
@@ -704,7 +770,7 @@
 
     async function checkout(event) {
       event.preventDefault();
-      if (!cartHasItems || cartBusy || checkoutBusy || pendingFoodId !== null) return;
+      if (!cartHasItems || cartBusy || checkoutBusy) return;
 
       const input = byId("addressInput");
       const address = input.value.trim();
@@ -719,12 +785,14 @@
       byId("checkoutNotice").classList.add("d-none");
 
       try {
-        await postJson("/api/v1/orders/checkout", {
+        const result = await postJson("/api/v1/orders/checkout", {
           customer_id: customerId,
           delivery_address: address,
-          payment_method: byId("paymentSelect").value
+          payment_method: byId("paymentSelect").value,
+          restaurant_ids: selectedCartGroups().map(group => group.restaurant_id)
         });
-        showCheckoutNotice("Đặt hàng thành công. Bạn có thể xem trạng thái đơn bên dưới.");
+        const count = result.orders?.length ?? 1;
+        showCheckoutNotice(`Đã đặt ${count} đơn. Bạn có thể theo dõi từng đơn bên dưới.`);
         byId("customerOrdersHeading").focus();
         await refreshAfterChange();
         await loadCart();
@@ -755,6 +823,11 @@
               <span class="badge text-bg-primary">${escapeHtml(label(orderLabels, order.status))}</span>
             </div>
             ${details}
+            ${order.delivery_failure_reason ? `
+              <p class="small text-danger text-break mt-2 mb-0">
+                Lý do giao thất bại: ${escapeHtml(order.delivery_failure_reason)}
+              </p>
+            ` : ""}
             ${buttons ? `<div class="d-flex flex-wrap gap-2 mt-2">${buttons}</div>` : ""}
           </article>
         </div>
@@ -788,6 +861,32 @@
           `).join("")}
         </ul>
       `;
+    }
+
+    function renderDriverLocation(order) {
+      if (order.status !== "DELIVERING") return "";
+      const location = order.driver_location;
+      if (!location?.simulated) return "";
+
+      const { latitude, longitude } = location;
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return "";
+
+      const lat = latitude.toFixed(5);
+      const lon = longitude.toFixed(5);
+      const mapUrl =
+        `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}`;
+      const caption = location.demo_route_finished
+        ? "Tuyến mô phỏng đã chạy xong. Đơn vẫn chờ tài xế xác nhận đã giao."
+        : `Tọa độ mô phỏng: ${lat}, ${lon}`;
+
+      return `
+        <section class="border rounded bg-light p-2 mt-2 mb-2">
+          <p class="small fw-semibold mb-1">Vị trí tài xế · Mô phỏng</p>
+          <p class="small text-muted mb-1">${caption}</p>
+          <a class="small" href="${mapUrl}" target="_blank" rel="noopener noreferrer">
+            Mở vị trí mô phỏng trên bản đồ
+          </a>
+        </section>`;
     }
 
     function renderCustomerProgress(order) {
@@ -857,9 +956,13 @@
         list.dataset.rendered = html;
       };
 
-      setContent("customerOrders", orders.map(order => orderCard(order, `
+      const renderCustomerOrder = order => orderCard(order, `
         <div class="small text-break">Giao tới: ${escapeHtml(order.delivery_address)}</div>
+        ${order.restaurant_name
+          ? `<div class="small fw-semibold">${escapeHtml(order.restaurant_name)}</div>`
+          : ""}
         ${renderCustomerProgress(order)}
+        ${renderDriverLocation(order)}
         ${["COMPLETED", "DELIVERED"].includes(order.status) ? `
           <button type="button" class="btn btn-sm btn-outline-dark mb-2"
                   data-review-order="${escapeHtml(order.order_id)}">
@@ -880,7 +983,56 @@
           + orderButton("customer-cancel", order.order_id, "Hủy đơn", "btn-outline-danger")
         : order.dispatch_status === "FAILED" && ["PREPARING", "READY"].includes(order.status)
           ? orderButton("retry-dispatch", order.order_id, "Tìm lại tài xế", "btn-outline-primary")
-          : "")).join("") || empty);
+          : "");
+
+      const groups = new Map();
+      for (const order of orders) {
+        if (!order.checkout_group_id) continue;
+        const groupId = order.checkout_group_id;
+        if (!groups.has(groupId)) groups.set(groupId, []);
+        groups.get(groupId).push(order);
+      }
+
+      const shownGroups = new Set();
+      const customerContent = orders.map(order => {
+        const groupId = order.checkout_group_id;
+        if (!groupId) return renderCustomerOrder(order);
+        if (shownGroups.has(groupId)) return "";
+
+        shownGroups.add(groupId);
+        const groupedOrders = groups.get(groupId);
+        const total = groupedOrders.reduce(
+          (sum, item) => sum + Number(item.grand_total), 0
+        );
+        const counts = new Map();
+        for (const item of groupedOrders) {
+          const status = label(orderLabels, item.status);
+          counts.set(status, (counts.get(status) ?? 0) + 1);
+        }
+        const progress = [...counts].map(
+          ([status, count]) => `${count} ${status}`
+        ).join(" · ");
+
+        return `
+          <div class="col-12">
+            <section class="border rounded bg-white p-3">
+              <div class="d-flex flex-wrap justify-content-between gap-2">
+                <h3 class="h6 fw-bold mb-0">
+                  Đặt chung #${escapeHtml(groupId.slice(0, 8))}
+                </h3>
+                <strong class="small">Tổng lúc đặt: ${formatMoney(total)}</strong>
+              </div>
+              <p class="small text-muted mb-3">
+                ${groupedOrders.length} quán · ${escapeHtml(progress)}
+              </p>
+              <div class="row g-3">
+                ${groupedOrders.map(renderCustomerOrder).join("")}
+              </div>
+            </section>
+          </div>`;
+      }).join("");
+
+      setContent("customerOrders", customerContent || empty);
 
       setContent("restaurantOrders", kitchenOrders.map(order => orderCard(order, `
         ${renderOrderItems(order.items)}
@@ -903,6 +1055,7 @@
             ? orderButton("pickup", order.order_id, "Đã lấy hàng", "btn-primary")
             : order.status === "DELIVERING" && order.assignment_status === "ACCEPTED"
               ? orderButton("complete", order.order_id, "Xác nhận đã giao", "btn-success")
+                + orderButton("delivery-failed", order.order_id, "Giao thất bại", "btn-outline-danger")
               : "";
         return orderCard(order, `
           <div class="small text-break">Địa chỉ giao: ${escapeHtml(order.delivery_address)}</div>
@@ -935,12 +1088,23 @@
                 <td>${escapeHtml(label(paymentLabels, order.payment_method))}</td>
                 <td>
                   ${escapeHtml(label(paymentLabels, order.payment_status))}
-                  ${order.status === "CANCELLED" && order.payment_method === "ONLINE"
+                  ${order.status === "DELIVERY_FAILED" && order.payment_status === "REFUND_REVIEW"
+                    ? `<div class="mt-1 d-flex flex-wrap gap-1">${
+                      orderButton("approve-failure-refund", order.order_id, "Duyệt hoàn tiền", "btn-outline-primary")
+                      + orderButton("deny-failure-refund", order.order_id, "Từ chối hoàn tiền", "btn-outline-danger")
+                    }</div>`
+                    : ""}
+                  ${["CANCELLED", "DELIVERY_FAILED"].includes(order.status) && order.payment_method === "ONLINE"
                     && order.payment_status === "REFUND_PROCESSING"
                     ? orderButton("confirm-refund", order.order_id, "Xác nhận hoàn tiền mô phỏng", "btn-outline-primary")
                     : ""}
                 </td>
-                <td>${escapeHtml(label(orderLabels, order.status))}</td>
+                <td>
+                  ${escapeHtml(label(orderLabels, order.status))}
+                  ${order.delivery_failure_reason
+                    ? `<div class="small text-break">${escapeHtml(order.delivery_failure_reason)}</div>`
+                    : ""}
+                </td>
               </tr>
             `).join("")}
           </tbody>
@@ -998,6 +1162,9 @@
         "driver-reject": `/api/v1/dispatch/${id}/reject`,
         "retry-dispatch": `/api/v1/orders/${id}/retry-dispatch`,
         "pickup": `/api/v1/orders/${id}/pickup`,
+        "delivery-failed": `/api/v1/orders/${id}/delivery-failed`,
+        "approve-failure-refund": `/api/v1/orders/${id}/failure-refund/approve`,
+        "deny-failure-refund": `/api/v1/orders/${id}/failure-refund/deny`,
         "complete": `/api/v1/orders/${id}/complete`
       };
 
@@ -1008,7 +1175,20 @@
       syncControls();
 
       try {
-        await api(routes[action], { method: "POST" });
+        const request = { method: "POST" };
+        if (action === "delivery-failed") {
+          const reason = window.prompt("Lý do giao thất bại (tối đa 500 ký tự):");
+          if (reason === null) return;
+          if (!reason.trim() || reason.trim().length > 500) {
+            throw new Error("Vui lòng nhập lý do từ 1 đến 500 ký tự.");
+          }
+          request.headers = { "Content-Type": "application/json" };
+          request.body = JSON.stringify({ reason: reason.trim() });
+        }
+        if (action === "deny-failure-refund"
+            && !window.confirm("Từ chối hoàn tiền cho đơn giao thất bại này?")) return;
+
+        await api(routes[action], request);
         const message = {
           "customer-cancel": "Đã hủy đơn.",
           "restaurant-cancel": "Đã từ chối đơn.",
@@ -1020,6 +1200,9 @@
           "confirm-payment": "Đã xác nhận thanh toán mô phỏng.",
           "confirm-refund": "Đã xác nhận hoàn tiền mô phỏng.",
           "pickup": "Đã lấy hàng. Đơn đang được giao.",
+          "delivery-failed": "Đã ghi nhận giao thất bại.",
+          "approve-failure-refund": "Đã duyệt. Bạn có thể xác nhận hoàn tiền mô phỏng.",
+          "deny-failure-refund": "Đã từ chối hoàn tiền.",
           "complete": "Đã xác nhận giao hàng."
         }[action];
         showNotice(message);
@@ -1051,25 +1234,10 @@
       event.target.setCustomValidity("");
     });
     byId("checkoutForm").addEventListener("submit", checkout);
-    byId("confirmReset").addEventListener("click", () => {
-      if (pendingFoodId !== null) void addToCart(pendingFoodId, true, pendingFoodOptions ?? {});
-    });
-
-    modalElement.addEventListener("hide.bs.modal", event => {
-      if (cartBusy && !byId("confirmReset").dataset.allowClose) event.preventDefault();
-    });
-    modalElement.addEventListener("hidden.bs.modal", () => {
-      pendingFoodId = null;
-      pendingFoodOptions = null;
-      byId("resetError").classList.add("d-none");
-      syncControls();
-    });
-
     orderLists.forEach(list => list.addEventListener("click", handleOrderAction));
     byId("cartItems").addEventListener("click", async event => {
       const button = event.target.closest("[data-cart-quantity]");
-      if (!button || button.disabled || !customerId || cartBusy || checkoutBusy ||
-          pendingFoodId !== null) return;
+      if (!button || button.disabled || !customerId || cartBusy || checkoutBusy) return;
 
       const itemId = button.closest("[data-cart-item-id]").dataset.cartItemId;
       const quantity = Number(button.dataset.cartQuantity);
@@ -1093,6 +1261,12 @@
     });
 
     byId("restaurantOrderFilter").addEventListener("change", () => renderOrders(lastOrders));
+
+    byId("menuRestaurant").addEventListener("change", () => {
+      clearTimeout(searchTimer);
+      void loadMenu();
+    });
+    byId("retryRestaurantFilter").addEventListener("click", loadRestaurantFilter);
 
     byId("menuCategory").addEventListener("change", () => {
       menuRequest?.abort();

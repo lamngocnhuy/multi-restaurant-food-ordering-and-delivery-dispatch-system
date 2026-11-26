@@ -142,3 +142,21 @@ header nav a {
     margin-top: 0.5rem;
   }
 }
+
+/* Keep sold-out items visible while distinguishing them from available items. */
+.menu-card-sold-out {
+  background-color: #f1f3f2;
+}
+
+.menu-card-sold-out .card-img-top {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.menu-card-sold-out [data-add]:disabled {
+  background-color: #e6eae7;
+  border-color: #c5cec8;
+  color: #47534b;
+  opacity: 1;
+  cursor: not-allowed;
+}

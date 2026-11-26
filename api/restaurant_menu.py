@@ -105,7 +105,10 @@ def list_menu(
         .all()
     )
     return {
-        "restaurants": [{"id": item.id, "name": item.name} for item in restaurants],
+        "restaurants": [
+            {"id": item.id, "name": item.name, "status": item.status}
+            for item in restaurants
+        ],
         "foods": [food_data(food) for food in foods],
     }
 
@@ -146,3 +149,20 @@ def update_food(
     result = food_data(food)
     db.commit()
     return result
+
+
+class RestaurantStatusForm(BaseModel):
+    status: Literal["OPEN", "CLOSED"]
+
+
+@router.patch("/{restaurant_id}/status")
+def update_restaurant_status(
+    restaurant_id: str,
+    form: RestaurantStatusForm,
+    db: Session = Depends(get_db),
+    owner: User = Depends(require_owner),
+):
+    restaurant = find_owned_restaurant(db, owner, restaurant_id)
+    restaurant.status = form.status
+    db.commit()
+    return {"id": restaurant_id, "status": form.status}

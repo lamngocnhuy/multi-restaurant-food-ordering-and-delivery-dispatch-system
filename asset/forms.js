@@ -43,49 +43,76 @@ function connectPasswordToggle() {
 
 function connectCheckoutReview() {
   const form = getFormElement("checkoutForm");
-  const submitButton = getFormElement("checkoutButton");
+  const submit = getFormElement("checkoutButton");
   const address = getFormElement("addressInput");
   const payment = getFormElement("paymentSelect");
+  const cart = getFormElement("cartItems");
   const total = getFormElement("cartTotal");
-  const cartItems = getFormElement("cartItems");
-  if (!form || !submitButton || !address || !payment || !total || !cartItems) return;
+  if (!form || !submit || !address || !payment || !cart || !total) return;
 
   const dialog = document.createElement("dialog");
   dialog.className = "border rounded-4 shadow p-0";
-  dialog.style.width = "min(92vw, 460px)";
+  dialog.style.width = "min(92vw, 520px)";
+  dialog.style.maxHeight = "85vh";
   dialog.setAttribute("aria-labelledby", "checkoutReviewTitle");
   dialog.innerHTML = `
     <div class="p-4">
       <h2 id="checkoutReviewTitle" class="h5 fw-bold mb-3">Kiểm tra đơn hàng</h2>
-      <p class="small text-muted mb-1">Món trong giỏ</p>
-      <ul id="reviewItems" class="small ps-3 mb-3"></ul>
+      <p class="small text-muted" data-count></p>
+      <div data-groups class="mb-3"></div>
       <dl class="mb-3">
         <dt class="small">Địa chỉ giao hàng</dt>
-        <dd id="reviewAddress" class="text-break"></dd>
+        <dd class="text-break" data-address></dd>
         <dt class="small">Phương thức thanh toán</dt>
-        <dd id="reviewPayment"></dd>
+        <dd data-payment></dd>
         <dt class="small">Tổng thanh toán</dt>
-        <dd id="reviewTotal" class="fs-5 fw-bold text-danger"></dd>
+        <dd class="fs-5 fw-bold text-danger" data-total></dd>
       </dl>
       <div class="d-flex flex-wrap justify-content-end gap-2">
-        <button id="reviewBack" type="button" class="btn btn-outline-secondary" autofocus>
+        <button type="button" class="btn btn-outline-secondary" data-back autofocus>
           Quay lại
         </button>
-        <button id="reviewConfirm" type="button" class="btn btn-dark">
+        <button type="button" class="btn btn-dark" data-confirm>
           Xác nhận đặt hàng
         </button>
       </div>
     </div>`;
   document.body.append(dialog);
 
+  const groupsBox = dialog.querySelector("[data-groups]");
   let confirmed = false;
-  const reviewItems = dialog.querySelector("#reviewItems");
+
+  function renderGroup(group) {
+    const section = document.createElement("section");
+    section.className = "border rounded p-3 mb-2";
+
+    const title = document.createElement("h3");
+    title.className = "h6 mb-2";
+    title.textContent = group.querySelector("label strong")?.textContent.trim()
+      || "Nhà hàng";
+
+    const items = document.createElement("ul");
+    items.className = "small ps-3 mb-2";
+    for (const row of group.querySelectorAll(".fw-semibold")) {
+      const item = document.createElement("li");
+      const quantity = row.nextElementSibling?.textContent?.trim();
+      item.textContent = [row.textContent.trim(), quantity].filter(Boolean).join(" · ");
+      items.append(item);
+    }
+
+    const amounts = document.createElement("p");
+    amounts.className = "small text-muted mb-0";
+    amounts.textContent = group.querySelector("[data-group-totals]")?.textContent ?? "";
+    section.append(title, items, amounts);
+    return section;
+  }
 
   form.addEventListener("submit", event => {
-    if (confirmed || submitButton.disabled) return;
+    if (confirmed) return;
 
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (submit.disabled || dialog.open) return;
 
     const deliveryAddress = address.value.trim();
     if (deliveryAddress.length < 5) {
@@ -94,31 +121,30 @@ function connectCheckoutReview() {
       return;
     }
 
-    reviewItems.replaceChildren();
-    for (const row of cartItems.querySelectorAll(".fw-semibold")) {
-      const item = document.createElement("li");
-      const quantity = row.nextElementSibling?.textContent?.trim();
-      item.textContent = quantity
-        ? `${row.textContent.trim()} · ${quantity}`
-        : row.textContent.trim();
-      reviewItems.append(item);
-    }
+    const selectedGroups = [...cart.querySelectorAll("[data-cart-group]")].filter(
+      group => group.querySelector("[data-cart-select]")?.checked
+    );
+    if (!selectedGroups.length) return;
 
-    dialog.querySelector("#reviewAddress").textContent = deliveryAddress;
-    dialog.querySelector("#reviewPayment").textContent = payment.selectedOptions[0].textContent;
-    dialog.querySelector("#reviewTotal").textContent = total.textContent;
+    groupsBox.replaceChildren(...selectedGroups.map(renderGroup));
+    dialog.querySelector("[data-count]").textContent =
+      `Bạn đang đặt ${selectedGroups.length} đơn từ ${selectedGroups.length} quán.`;
+    dialog.querySelector("[data-address]").textContent = deliveryAddress;
+    dialog.querySelector("[data-payment]").textContent =
+      payment.selectedOptions[0]?.textContent ?? "";
+    dialog.querySelector("[data-total]").textContent = total.textContent;
     dialog.showModal();
   }, true);
 
   address.addEventListener("input", () => address.setCustomValidity(""));
-  dialog.querySelector("#reviewBack").addEventListener("click", () => dialog.close());
-  dialog.querySelector("#reviewConfirm").addEventListener("click", () => {
+  dialog.querySelector("[data-back]").addEventListener("click", () => dialog.close());
+  dialog.querySelector("[data-confirm]").addEventListener("click", () => {
     dialog.close();
-    if (submitButton.disabled) return;
+    if (submit.disabled) return;
 
     confirmed = true;
     try {
-      form.requestSubmit(submitButton);
+      form.requestSubmit(submit);
     } finally {
       confirmed = false;
     }

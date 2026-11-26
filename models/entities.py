@@ -127,3 +127,36 @@ class OrderReviewReply(Base):
     order_id = Column(String, ForeignKey("order_reviews.order_id"), primary_key=True)
     restaurant_id = Column(String, ForeignKey("restaurants.id"), primary_key=True)
     message = Column(Text, nullable=False)
+
+
+class DeliveryFailure(Base):
+    __tablename__ = "delivery_failures"
+
+    order_id = Column(String, ForeignKey("orders.id"), primary_key=True)
+    reason = Column(Text, nullable=False)
+
+
+class RestaurantApplication(Base):
+    __tablename__ = "restaurant_applications"
+
+    owner_id = Column(String, ForeignKey("users.id"), primary_key=True)
+    restaurant_name = Column(String(150), nullable=False)
+    address = Column(Text, nullable=False)
+    status = Column(String(16), nullable=False, default="PENDING")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class DeliverySimulation(Base):
+    __tablename__ = "delivery_simulations"
+
+    order_id = Column(String, ForeignKey("orders.id"), primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    start_latitude = Column(Float, nullable=False)
+    start_longitude = Column(Float, nullable=False)
+
+
+class CheckoutGroupOrder(Base):
+    __tablename__ = "checkout_group_orders"
+
+    order_id = Column(String, ForeignKey("orders.id"), primary_key=True)
+    group_id = Column(String, nullable=False, index=True)

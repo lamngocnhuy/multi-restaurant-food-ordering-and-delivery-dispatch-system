@@ -1,4 +1,5 @@
 from api.auth import get_current_user, router as auth_router
+from api.partner_applications import router as partner_applications_router
 from api.order_reviews import (
     restaurant_rating_summary,
     router as order_reviews_router,
@@ -20,7 +21,10 @@ from forms.schemas import AddToCartForm, CheckoutForm
 from models.entities import (
     Cart,
     CartItem,
+    CheckoutGroupOrder,
     DeliveryAssignment,
+    DeliverySimulation,
+    DeliveryFailure,
     FoodItem,
     Order,
     OrderItem,
@@ -98,6 +102,7 @@ app.mount("/includes", StaticFiles(directory=INCLUDES_DIR), name="includes")
 
 
 app.include_router(auth_router)
+app.include_router(partner_applications_router)
 app.include_router(order_reviews_router)
 app.include_router(admin_users_router)
 app.include_router(driver_availability_router)
@@ -211,10 +216,23 @@ def seed_sample_data(db: Session = Depends(get_db), user: User = Depends(get_cur
     }
 
 
+@app.get("/api/v1/restaurants")
+def list_menu_restaurants(db: Session = Depends(get_db)):
+    restaurants = (
+        db.query(Restaurant.id, Restaurant.name)
+        .join(FoodItem, FoodItem.restaurant_id == Restaurant.id)
+        .distinct()
+        .order_by(Restaurant.name, Restaurant.id)
+        .all()
+    )
+    return [{"id": item.id, "name": item.name} for item in restaurants]
+
+
 @app.get("/api/v1/menu")
 def get_menu(
     keyword: str = "",
     category: str = "",
+    restaurant_id: str = "",
     db: Session = Depends(get_db),
 ):
     if category not in ("", "FOOD", "DRINK"):
@@ -231,6 +249,8 @@ def get_menu(
         )
     if category:
         query = query.filter(FoodItem.category == category)
+    if restaurant_id:
+        query = query.filter(Restaurant.id == restaurant_id)
 
     ratings = restaurant_rating_summary(db)
     return [
@@ -244,6 +264,7 @@ def get_menu(
             "image_url": food.image_url,
             "restaurant_id": restaurant.id,
             "restaurant_name": restaurant.name,
+            "restaurant_status": restaurant.status,
             "restaurant_rating": ratings.get(restaurant.id),
         }
         for food, restaurant in query.order_by(Restaurant.name, FoodItem.name).all()
@@ -273,6 +294,9 @@ def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db), user: User =
     food = db.query(FoodItem).filter(FoodItem.id == form.food_id).first()
     if food is None:
         raise HTTPException(404, "Món ăn không tồn tại")
+    restaurant = db.get(Restaurant, food.restaurant_id)
+    if restaurant is None or restaurant.status == "CLOSED":
+        raise HTTPException(400, "Quán đang tạm ngừng nhận đơn")
     if food.status == "OUT_OF_STOCK":
         raise HTTPException(400, f"Món {food.name} đã hết")
 
@@ -280,7 +304,6 @@ def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db), user: User =
     if cart is None:
         cart = Cart(
             customer_id=form.customer_id,
-            restaurant_id=food.restaurant_id,
             total_amount=0,
         )
         db.add(cart)
@@ -288,15 +311,6 @@ def add_to_cart(form: AddToCartForm, db: Session = Depends(get_db), user: User =
 
     item_query = db.query(CartItem).filter(CartItem.cart_id == cart.id)
 
-    if cart.restaurant_id and cart.restaurant_id != food.restaurant_id:
-        if item_query.first() is not None:
-            if not form.force_reset_cart:
-                raise HTTPException(
-                    409, "REQ-9_CONFLICT: Giỏ hàng đang chứa món từ nhà hàng khác."
-                )
-            item_query.delete(synchronize_session="fetch")
-
-    cart.restaurant_id = food.restaurant_id
     unit_price, options_note = price_food_options(food, form)
     item = item_query.filter(CartItem.food_id == food.id).first()
 
@@ -352,6 +366,9 @@ def update_cart_item(
             food = db.get(FoodItem, item.food_id)
             if food is None or food.status == "OUT_OF_STOCK":
                 raise HTTPException(409, "Món đã hết. Bạn có thể giảm số lượng hoặc xóa món.")
+            restaurant = db.get(Restaurant, food.restaurant_id)
+            if restaurant is None or restaurant.status == "CLOSED":
+                raise HTTPException(409, "Quán đang tạm đóng. Bạn có thể giảm số lượng hoặc xóa món.")
         item.quantity = quantity
 
     db.flush()
@@ -365,23 +382,37 @@ def update_cart_item(
     return {"quantity": quantity, "total_amount": total}
 
 
+def grouped_cart_rows(db, cart_id):
+    rows = (
+        db.query(CartItem, FoodItem, Restaurant)
+        .join(FoodItem, CartItem.food_id == FoodItem.id)
+        .join(Restaurant, FoodItem.restaurant_id == Restaurant.id)
+        .filter(CartItem.cart_id == cart_id)
+        .order_by(Restaurant.name, Restaurant.id, FoodItem.name, CartItem.id)
+        .all()
+    )
+    groups = {}
+    for item, food, restaurant in rows:
+        groups.setdefault(restaurant.id, []).append((item, food, restaurant))
+    return groups
+
+
 @app.get("/api/v1/cart/{customer_id}")
-def get_cart(customer_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def get_cart(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     require_customer(user, customer_id)
-    cart = db.query(Cart).filter(Cart.customer_id == customer_id).first()
+    cart = db.query(Cart).filter_by(customer_id=customer_id).first()
     if cart is None:
-        return {"items": [], "total_amount": 0}
+        return {"items": [], "groups": [], "total_amount": 0}
 
-    rows = db.query(CartItem, FoodItem).join(
-        FoodItem, CartItem.food_id == FoodItem.id
-    ).filter(CartItem.cart_id == cart.id).all()
-
-    return {
-        "cart_id": cart.id,
-        "restaurant_id": cart.restaurant_id,
-        "total_amount": sum(item.quantity * item.unit_price for item, _ in rows),
-        "items": [
-            {
+    groups = []
+    for restaurant_id, rows in grouped_cart_rows(db, cart.id).items():
+        items = []
+        for item, food, restaurant in rows:
+            items.append({
                 "id": item.id,
                 "food_id": food.id,
                 "food_name": food.name,
@@ -389,85 +420,162 @@ def get_cart(customer_id: str, db: Session = Depends(get_db), user: User = Depen
                 "quantity": item.quantity,
                 "unit_price": item.unit_price,
                 "options_note": item.options_note,
-            }
-            for item, food in rows
-        ],
+                "available": food.status != "OUT_OF_STOCK" and restaurant.status != "CLOSED",
+            })
+        groups.append({
+            "restaurant_id": restaurant_id,
+            "restaurant_name": rows[0][2].name,
+            "subtotal": sum(item.quantity * item.unit_price for item, _, _ in rows),
+            "delivery_fee": DELIVERY_FEE,
+            "items": items,
+        })
+
+    return {
+        "cart_id": cart.id,
+        "restaurant_id": groups[0]["restaurant_id"] if len(groups) == 1 else None,
+        "total_amount": sum(group["subtotal"] for group in groups),
+        "items": [item for group in groups for item in group["items"]],
+        "groups": groups,
     }
 
 
+class GroupCheckoutForm(CheckoutForm):
+    restaurant_ids: list[str] | None = None
+
+
 @app.post("/api/v1/orders/checkout")
-def checkout(form: CheckoutForm, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def checkout(
+    form: GroupCheckoutForm,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     require_customer(user, form.customer_id)
     address = (form.delivery_address or "").strip()
-    if not address:
-        raise HTTPException(400, "Vui lòng nhập đầy đủ thông tin giao hàng")
+    if len(address) < 5:
+        raise HTTPException(400, "Vui lòng nhập đầy đủ địa chỉ giao hàng")
     if form.payment_method not in ("COD", "ONLINE"):
         raise HTTPException(400, "Phương thức thanh toán không hợp lệ")
 
-    lock_customer(db, form.customer_id)
-    cart = db.query(Cart).filter(Cart.customer_id == form.customer_id).first()
-    if cart is None or not cart.restaurant_id:
+    lock_customer(db, user.id)
+    cart = db.query(Cart).filter_by(customer_id=user.id).first()
+    groups = grouped_cart_rows(db, cart.id) if cart else {}
+    if not groups:
         raise HTTPException(400, "Giỏ hàng trống")
 
-    items = db.query(CartItem).filter(CartItem.cart_id == cart.id).all()
-    if not items:
-        raise HTTPException(400, "Giỏ hàng trống")
+    if form.restaurant_ids is None:
+        if len(groups) != 1:
+            raise HTTPException(400, "Vui lòng chọn giỏ muốn đặt")
+        selected = list(groups)
+    else:
+        selected = list(dict.fromkeys(form.restaurant_ids))
 
-    unavailable = db.query(FoodItem.name).filter(
-        FoodItem.id.in_([item.food_id for item in items]),
-        FoodItem.status == "OUT_OF_STOCK",
-    ).first()
-    if unavailable:
-        raise HTTPException(409, f"Món {unavailable[0]} đã hết. Vui lòng xóa món khỏi giỏ.")
+    if not selected:
+        raise HTTPException(400, "Vui lòng chọn ít nhất một giỏ")
+    if any(restaurant_id not in groups for restaurant_id in selected):
+        raise HTTPException(409, "Giỏ hàng đã thay đổi. Vui lòng chọn lại.")
 
-    subtotal = sum(item.quantity * item.unit_price for item in items)
-    grand_total = subtotal + DELIVERY_FEE
+    for restaurant_id in selected:
+        rows = groups[restaurant_id]
+        restaurant = rows[0][2]
+        if restaurant.status == "CLOSED":
+            raise HTTPException(
+                409, f"Quán {restaurant.name} đang tạm đóng. Hãy bỏ chọn giỏ của quán."
+            )
+        for _, food, _ in rows:
+            if food.status == "OUT_OF_STOCK":
+                raise HTTPException(409, f"Món {food.name} đã hết. Vui lòng xóa món khỏi giỏ.")
 
-    order = Order(
-        customer_id=form.customer_id,
-        delivery_address=address,
-        grand_total=grand_total,
-        status="PENDING",
-    )
-    db.add(order)
-    db.flush()
+    placed = []
+    for restaurant_id in selected:
+        rows = groups[restaurant_id]
+        subtotal = sum(item.quantity * item.unit_price for item, _, _ in rows)
 
-    sub_order = SubOrder(
-        order_id=order.id,
-        restaurant_id=cart.restaurant_id,
-        subtotal=subtotal,
-        status="PENDING",
-    )
-    db.add(sub_order)
-    db.flush()
+        order = Order(
+            customer_id=user.id,
+            delivery_address=address,
+            grand_total=subtotal + DELIVERY_FEE,
+            status="PENDING",
+        )
+        db.add(order)
+        db.flush()
 
-    for item in items:
-        db.add(OrderItem(
-            sub_order_id=sub_order.id,
-            food_id=item.food_id,
-            quantity=item.quantity,
-            unit_price=item.unit_price,
-            total_price=item.quantity * item.unit_price,
-            options_note=item.options_note,
+        sub = SubOrder(
+            order_id=order.id,
+            restaurant_id=restaurant_id,
+            subtotal=subtotal,
+            status="PENDING",
+        )
+        db.add(sub)
+        db.flush()
+
+        for item, _, _ in rows:
+            db.add(OrderItem(
+                sub_order_id=sub.id,
+                food_id=item.food_id,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                total_price=item.quantity * item.unit_price,
+                options_note=item.options_note,
+            ))
+            db.delete(item)
+
+        db.add(Payment(
+            order_id=order.id,
+            method=form.payment_method,
+            amount=order.grand_total,
+            status="PENDING",
         ))
-        db.delete(item)
+        placed.append({
+            "order_id": order.id,
+            "sub_order_id": sub.id,
+            "restaurant_id": restaurant_id,
+            "grand_total": order.grand_total,
+        })
 
-    db.add(Payment(
-        order_id=order.id,
-        method=form.payment_method,
-        amount=grand_total,
-        status="PENDING",
-    ))
+    group_id = placed[0]["order_id"] if len(placed) > 1 else None
+    if group_id:
+        for entry in placed:
+            db.add(CheckoutGroupOrder(order_id=entry["order_id"], group_id=group_id))
 
-    cart.restaurant_id = None
-    cart.total_amount = 0
-    order_id, sub_order_id = order.id, sub_order.id
+    selected_set = set(selected)
+    remaining = {
+        restaurant_id: rows for restaurant_id, rows in groups.items()
+        if restaurant_id not in selected_set
+    }
+    cart.total_amount = sum(
+        item.quantity * item.unit_price
+        for rows in remaining.values() for item, _, _ in rows
+    )
+    cart.restaurant_id = next(iter(remaining)) if len(remaining) == 1 else None
     db.commit()
 
     return {
         "message": "Đặt hàng thành công",
-        "order_id": order_id,
-        "sub_order_id": sub_order_id,
+        "group_id": group_id,
+        "orders": placed,
+        "order_id": placed[0]["order_id"],
+        "sub_order_id": placed[0]["sub_order_id"],
+    }
+
+
+def simulated_driver_location(db, order, user):
+    if user.role != "CUSTOMER" or order.status != "DELIVERING":
+        return None
+
+    simulation = db.get(DeliverySimulation, order.id)
+    if simulation is None:
+        return None
+
+    elapsed = (utc_now() - simulation.started_at).total_seconds()
+    fraction = min(1.0, max(0.0, elapsed / 180))
+    latitude = min(90.0, simulation.start_latitude + 0.006 * fraction)
+    longitude = min(180.0, simulation.start_longitude + 0.008 * fraction)
+
+    return {
+        "latitude": round(latitude, 5),
+        "longitude": round(longitude, 5),
+        "simulated": True,
+        "demo_route_finished": fraction == 1.0,
     }
 
 
@@ -487,7 +595,7 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
             DeliveryAssignment, DeliveryAssignment.sub_order_id == SubOrder.id
         ).filter(
             DeliveryAssignment.driver_id == user.id,
-            DeliveryAssignment.status.in_(("OFFERED", "ACCEPTED", "COMPLETED")),
+            DeliveryAssignment.status.in_(("OFFERED", "ACCEPTED", "COMPLETED", "FAILED")),
         )
         query = query.filter(Order.id.in_(assigned))
     elif customer_id:
@@ -515,6 +623,14 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
                 "options_note": item.options_note,
             })
 
+    failures = {}
+    if orders:
+        failures = dict(
+            db.query(DeliveryFailure.order_id, DeliveryFailure.reason)
+            .filter(DeliveryFailure.order_id.in_([order.id for order in orders]))
+            .all()
+        )
+
     output = []
     for order in orders:
         sub = db.query(SubOrder).filter(SubOrder.order_id == order.id).first()
@@ -524,19 +640,28 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
         if sub is not None:
             assignment = db.query(DeliveryAssignment).filter(
                 DeliveryAssignment.sub_order_id == sub.id,
-                DeliveryAssignment.status.in_(["OFFERED", "ACCEPTED", "COMPLETED"]),
+                DeliveryAssignment.status.in_(["OFFERED", "ACCEPTED", "COMPLETED", "FAILED"]),
             )
             if user.role == "DRIVER":
                 assignment = assignment.filter(DeliveryAssignment.driver_id == user.id)
             assignment = assignment.order_by(DeliveryAssignment.assigned_at.desc()).first()
 
+        group = db.get(CheckoutGroupOrder, order.id) if user.role == "CUSTOMER" else None
         output.append({
             "order_id": order.id,
+            "checkout_group_id": group.group_id if group else None,
+            "restaurant_name": (
+                db.query(Restaurant.name).filter_by(id=sub.restaurant_id).scalar()
+                if sub and user.role == "CUSTOMER"
+                else None
+            ),
             "sub_order_id": sub.id if sub else None,
             "items": items_by_sub_order.get(sub.id, []) if sub else [],
             "delivery_address": order.delivery_address,
+            "driver_location": simulated_driver_location(db, order, user),
             "grand_total": order.grand_total,
             "status": order.status,
+            "delivery_failure_reason": failures.get(order.id),
             "dispatch_status": sub.dispatch_status if sub else None,
             "payment_method": payment.method if payment else "COD",
             "payment_status": payment.status if payment else "PENDING",
@@ -783,6 +908,23 @@ def confirm_pickup(
 
     sub.status = "DELIVERING"
     order.status = "DELIVERING"
+
+    restaurant = db.get(Restaurant, sub.restaurant_id)
+    if (
+        restaurant is not None
+        and restaurant.latitude is not None
+        and restaurant.longitude is not None
+        and -90 <= restaurant.latitude <= 90
+        and -180 <= restaurant.longitude <= 180
+        and db.get(DeliverySimulation, order.id) is None
+    ):
+        db.add(DeliverySimulation(
+            order_id=order.id,
+            started_at=utc_now(),
+            start_latitude=restaurant.latitude,
+            start_longitude=restaurant.longitude,
+        ))
+
     db.commit()
     return {"message": "Đã lấy hàng. Đơn đang được giao."}
 
@@ -847,10 +989,82 @@ def update_mock_payment(
 
     if payment is None:
         raise HTTPException(404, "Không tìm thấy giao dịch chuyển khoản")
-    if order.status != order_status or payment.status not in (before, after):
+    valid_order_status = order.status == order_status or (
+        action == "refund" and order.status == "DELIVERY_FAILED"
+    )
+    if not valid_order_status or payment.status not in (before, after):
         raise HTTPException(409, "Trạng thái giao dịch không cho phép thao tác này")
     if payment.status != after:
         payment.status = after
         db.commit()
 
     return {"payment_status": after}
+
+
+@app.post("/api/v1/orders/{order_id}/delivery-failed")
+def report_delivery_failure(
+    order_id: str,
+    reason: str = Body(..., embed=True, min_length=1, max_length=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_role(user, "DRIVER")
+    reason = reason.strip()
+    if not reason:
+        raise HTTPException(422, "Vui lòng nhập lý do giao thất bại")
+
+    order = lock_order(db, order_id)
+    sub = find_sub_order(db, order.id)
+    if sub is None:
+        raise HTTPException(404, "Không tìm thấy chuyến giao")
+
+    assignment = db.query(DeliveryAssignment).filter_by(
+        sub_order_id=sub.id,
+        driver_id=user.id,
+        status="ACCEPTED",
+    ).with_for_update().first()
+    if assignment is None:
+        raise HTTPException(404, "Không tìm thấy chuyến đang giao của bạn")
+
+    if order.status != "DELIVERING" or sub.status != "DELIVERING":
+        raise HTTPException(409, "Chỉ có thể báo thất bại khi đơn đang giao")
+
+    payment = db.query(Payment).filter_by(order_id=order.id).first()
+    if payment and payment.method == "ONLINE" and payment.status == "SUCCESS":
+        payment.status = "REFUND_REVIEW"
+
+    order.status = "DELIVERY_FAILED"
+    sub.status = "DELIVERY_FAILED"
+    assignment.status = "FAILED"
+    db.add(DeliveryFailure(order_id=order.id, reason=reason))
+    db.commit()
+
+    return {"message": "Đã ghi nhận giao thất bại"}
+
+
+@app.post("/api/v1/orders/{order_id}/failure-refund/{decision}")
+def decide_failure_refund(
+    order_id: str,
+    decision: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_role(user, "ADMIN")
+    decisions = {"approve": "REFUND_PROCESSING", "deny": "REFUND_DENIED"}
+    if decision not in decisions:
+        raise HTTPException(422, "Quyết định không hợp lệ")
+
+    order = lock_order(db, order_id)
+    payment = db.query(Payment).filter_by(order_id=order.id, method="ONLINE").first()
+    if order.status != "DELIVERY_FAILED" or payment is None:
+        raise HTTPException(409, "Đơn không thuộc diện duyệt hoàn tiền giao thất bại")
+
+    target = decisions[decision]
+    if payment.status == target:
+        return {"payment_status": target}
+    if payment.status != "REFUND_REVIEW":
+        raise HTTPException(409, "Yêu cầu hoàn tiền đã được xử lý")
+
+    payment.status = target
+    db.commit()
+    return {"payment_status": target}

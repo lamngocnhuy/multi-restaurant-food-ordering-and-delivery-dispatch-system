@@ -12,6 +12,13 @@
     <div class="card-body">
       <h2 id="ownerMenuHeading" class="h5 fw-bold">Quản lý thực đơn</h2>
       <p id="ownerMenuMessage" class="small" role="status"></p>
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <span class="small fw-semibold" data-restaurant-status></span>
+        <button type="button" class="btn btn-sm btn-outline-dark"
+                data-change-restaurant-status disabled>
+          Thay đổi trạng thái quán
+        </button>
+      </div>
 
       <form id="ownerFoodForm" class="row g-3 mb-3">
         <div class="col-md-3">
@@ -84,6 +91,9 @@
   const rows = panel.querySelector("tbody");
   const endpoint = "/api/v1/restaurant/menu";
 
+  const statusLabel = panel.querySelector("[data-restaurant-status]");
+  const statusButton = panel.querySelector("[data-change-restaurant-status]");
+  let restaurants = [];
   let foods = [];
   let editingId = null;
   let busy = false;
@@ -93,12 +103,23 @@
     message.className = error ? "small text-danger" : "small text-muted";
   }
 
+  function renderRestaurantStatus() {
+    const selected = restaurants.find(item => item.id === restaurant.value);
+    const closed = selected?.status === "CLOSED";
+    statusLabel.textContent = selected
+      ? (closed ? "Quán đang tạm ngừng nhận đơn" : "Quán đang nhận đơn")
+      : "";
+    statusButton.textContent = closed ? "Mở nhận đơn" : "Tạm ngừng nhận đơn";
+    statusButton.disabled = busy || !selected;
+  }
+
   function setBusy(value) {
     busy = value;
     restaurant.disabled = value;
     save.disabled = value || !restaurant.value;
     cancel.disabled = value;
     reload.disabled = value;
+    renderRestaurantStatus();
   }
 
   function clearEdit() {
@@ -160,6 +181,7 @@
       const selected = restaurant.value;
       const data = await api(endpoint);
       foods = data.foods;
+      restaurants = data.restaurants;
       restaurant.replaceChildren(...data.restaurants.map(
         item => new Option(item.name, item.id)
       ));
@@ -222,6 +244,32 @@
   restaurant.addEventListener("change", () => {
     clearEdit();
     render();
+    renderRestaurantStatus();
+  });
+
+  statusButton.addEventListener("click", async () => {
+    const selected = restaurants.find(item => item.id === restaurant.value);
+    if (busy || !selected) return;
+
+    const nextStatus = selected.status === "CLOSED" ? "OPEN" : "CLOSED";
+    setBusy(true);
+    status("");
+
+    try {
+      const result = await api(`${endpoint}/${encodeURIComponent(selected.id)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus })
+      });
+      selected.status = result.status;
+      status(result.status === "CLOSED"
+        ? "Quán đã tạm ngừng nhận đơn mới."
+        : "Quán đã mở nhận đơn mới.");
+    } catch (error) {
+      status(error.message, true);
+    } finally {
+      setBusy(false);
+    }
   });
   cancel.addEventListener("click", clearEdit);
   reload.addEventListener("click", loadMenu);
