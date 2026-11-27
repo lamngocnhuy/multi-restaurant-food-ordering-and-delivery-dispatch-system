@@ -117,11 +117,11 @@
                   <dd id="cartSubtotal" class="mb-1">0 VNĐ</dd>
                 </div>
                 <div class="d-flex justify-content-between gap-2">
-                  <dt class="fw-normal">Phí giao hàng</dt>
+                  <dt class="fw-normal">Phí giao tạm tính</dt>
                   <dd id="cartDeliveryFee" class="mb-1">0 VNĐ</dd>
                 </div>
                 <div class="d-flex justify-content-between gap-2 border-top mt-2 pt-2">
-                  <dt>Tổng thanh toán</dt>
+                  <dt>Tổng tạm tính</dt>
                   <dd id="cartTotal" class="text-danger fw-bold mb-0">0 VNĐ</dd>
                 </div>
               </dl>
@@ -138,6 +138,21 @@
                     <option value="COD">Tiền mặt khi nhận hàng (COD)</option>
                     <option value="ONLINE">Chuyển khoản trực tuyến (ONLINE)</option>
                   </select>
+                </div>
+                <div class="row g-2 mb-3">
+                  <div class="col-6">
+                    <label for="deliveryLat" class="form-label small">Vĩ độ giao hàng</label>
+                    <input id="deliveryLat" class="form-control" type="number" min="-90" max="90" step="any">
+                  </div>
+                  <div class="col-6">
+                    <label for="deliveryLon" class="form-label small">Kinh độ giao hàng</label>
+                    <input id="deliveryLon" class="form-control" type="number" min="-180" max="180" step="any">
+                  </div>
+                  <div class="form-text">Nhập tọa độ của địa chỉ giao để tính theo khoảng cách. Nếu bỏ trống cả hai, áp dụng phí demo 15.000 VNĐ mỗi quán.</div>
+                  <div class="col-12">
+                    <label for="voucherCode" class="form-label small">Mã giảm giá</label>
+                    <input id="voucherCode" class="form-control" maxlength="32">
+                  </div>
                 </div>
                 <button id="checkoutButton" type="submit" class="btn btn-dark w-100 fw-bold" disabled>
                   Đặt các giỏ đã chọn
@@ -254,12 +269,46 @@
 
 
 
+
+    function showCenteredNotice(message, type = "success") {
+      let dialog = document.getElementById("actionNoticeDialog");
+
+      if (!dialog) {
+        dialog = document.createElement("dialog");
+        dialog.id = "actionNoticeDialog";
+        dialog.className = "border-0 rounded-4 shadow p-4";
+        dialog.style.width = "min(420px, calc(100% - 2rem))";
+        dialog.setAttribute("aria-labelledby", "actionNoticeTitle");
+        dialog.setAttribute("aria-describedby", "actionNoticeText");
+        dialog.innerHTML = `
+          <h2 id="actionNoticeTitle" class="h5 fw-bold"></h2>
+          <p id="actionNoticeText" class="mb-3 text-break"></p>
+          <form method="dialog" class="d-flex justify-content-end">
+            <button class="btn btn-dark" type="submit" autofocus>\u0110\u00f3ng</button>
+          </form>
+        `;
+        document.body.append(dialog);
+      }
+
+      const title = dialog.querySelector("#actionNoticeTitle");
+      const text = dialog.querySelector("#actionNoticeText");
+      const isError = type === "danger" || type === "error";
+      title.textContent = isError
+        ? "Thao t\u00e1c ch\u01b0a ho\u00e0n t\u1ea5t"
+        : "Th\u00f4ng b\u00e1o";
+      title.classList.toggle("text-danger", isError);
+      text.textContent = String(message);
+      if (!dialog.open) dialog.showModal();
+    }
+
     function showNotice(message, type = "success") {
+      if (message) showCenteredNotice(message, type);
       byId("noticeText").textContent = message;
       byId("notice").className = `alert alert-${type}`;
     }
 
     function showCheckoutNotice(message, type = "success") {
+      if (message) showCenteredNotice(message, type);
       const notice = byId("checkoutNotice");
       notice.textContent = message;
       notice.className = `alert alert-${type}`;
@@ -768,6 +817,20 @@
       }
     }
 
+    function checkoutPayload() {
+      const latitude = byId("deliveryLat").value;
+      const longitude = byId("deliveryLon").value;
+      return {
+        customer_id: customerId,
+        delivery_address: byId("addressInput").value.trim(),
+        payment_method: byId("paymentSelect").value,
+        restaurant_ids: selectedCartGroups().map(group => group.restaurant_id),
+        latitude: latitude === "" ? null : Number(latitude),
+        longitude: longitude === "" ? null : Number(longitude),
+        voucher_code: byId("voucherCode").value.trim()
+      };
+    }
+
     async function checkout(event) {
       event.preventDefault();
       if (!cartHasItems || cartBusy || checkoutBusy) return;
@@ -786,11 +849,10 @@
 
       try {
         const result = await postJson("/api/v1/orders/checkout", {
-          customer_id: customerId,
-          delivery_address: address,
-          payment_method: byId("paymentSelect").value,
-          restaurant_ids: selectedCartGroups().map(group => group.restaurant_id)
+          ...checkoutPayload(),
+          expected_total: event.target.dataset.quotedTotal || null
         });
+        byId("voucherCode").value = "";
         const count = result.orders?.length ?? 1;
         showCheckoutNotice(`Đã đặt ${count} đơn. Bạn có thể theo dõi từng đơn bên dưới.`);
         byId("customerOrdersHeading").focus();

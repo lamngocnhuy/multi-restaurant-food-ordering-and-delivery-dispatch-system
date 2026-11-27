@@ -6,11 +6,16 @@ from api.order_reviews import (
 )
 from api.admin_users import router as admin_users_router
 from api.driver_availability import router as driver_availability_router
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from threading import Lock
 from api.restaurant_menu import router as restaurant_menu_router
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException
+from pydantic import Field
+from sqlalchemy import update
+from services.order_pricing import (
+    BASE_FEE, allocate_discount, delivery_price, platform_fee, voucher_is_valid,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +33,8 @@ from models.entities import (
     FoodItem,
     Order,
     OrderItem,
+    OrderPricing,
+    Voucher,
     Payment,
     Restaurant,
     SubOrder,
@@ -45,7 +52,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ASSET_DIR = ROOT / "asset"
 INCLUDES_DIR = ROOT / "includes"
 INDEX_FILE = ROOT / "controls" / "index.html"
-DELIVERY_FEE = 15_000
+DELIVERY_FEE = BASE_FEE
 
 REGULAR_SIZE = {"id": "REGULAR", "label": "Size thường", "extra": 0}
 LARGE_SIZE = {"id": "LARGE", "label": "Size lớn", "extra": 10000}
@@ -441,6 +448,19 @@ def get_cart(
 
 class GroupCheckoutForm(CheckoutForm):
     restaurant_ids: list[str] | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    voucher_code: str = Field(default="", max_length=32)
+    expected_total: float | None = Field(default=None, ge=0)
+
+
+@app.post("/api/v1/orders/quote")
+def quote_checkout(
+    form: GroupCheckoutForm,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return price_checkout(form, db, user, quote_only=True)
 
 
 @app.post("/api/v1/orders/checkout")
@@ -449,6 +469,10 @@ def checkout(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    return price_checkout(form, db, user)
+
+
+def price_checkout(form, db, user, *, quote_only=False):
     require_customer(user, form.customer_id)
     address = (form.delivery_address or "").strip()
     if len(address) < 5:
@@ -485,20 +509,66 @@ def checkout(
             if food.status == "OUT_OF_STOCK":
                 raise HTTPException(409, f"Món {food.name} đã hết. Vui lòng xóa món khỏi giỏ.")
 
-    placed = []
-    for restaurant_id in selected:
-        rows = groups[restaurant_id]
-        subtotal = sum(item.quantity * item.unit_price for item, _, _ in rows)
+    if (form.latitude is None) != (form.longitude is None):
+        raise HTTPException(422, "Vui lòng nhập đủ vĩ độ và kinh độ.")
 
+    code = form.voucher_code.strip().upper()
+    now = utc_now()
+    voucher = db.get(Voucher, code) if code else None
+    if code and not voucher_is_valid(voucher, now):
+        raise HTTPException(409, "Mã giảm giá không còn hiệu lực.")
+
+    subtotals = [
+        sum(item.quantity * item.unit_price for item, _, _ in groups[restaurant_id])
+        for restaurant_id in selected
+    ]
+    discounts = allocate_discount(subtotals, voucher.amount if voucher else 0)
+    prices = []
+    for restaurant_id, subtotal, discount in zip(selected, subtotals, discounts):
+        restaurant = groups[restaurant_id][0][2]
+        if form.latitude is not None and (restaurant.latitude is None or restaurant.longitude is None):
+            raise HTTPException(409, f"Quán {restaurant.name} chưa có tọa độ.")
+        fee, distance = delivery_price(restaurant, form.latitude, form.longitude)
+        prices.append({
+            "restaurant_id": restaurant_id, "restaurant_name": restaurant.name,
+            "subtotal": subtotal, "delivery_fee": fee, "distance_km": distance,
+            "discount": discount, "grand_total": subtotal + fee - discount,
+        })
+
+    total = sum(price["grand_total"] for price in prices)
+    if quote_only:
+        return {"orders": prices, "grand_total": total}
+    if form.expected_total is not None and abs(total - form.expected_total) > 0.001:
+        raise HTTPException(409, "Tổng tiền đã thay đổi. Vui lòng xem lại đơn.")
+
+    if voucher:
+        changed = db.execute(update(Voucher).where(
+            Voucher.code == code, Voucher.used_at.is_(None),
+            Voucher.starts_at <= now, Voucher.ends_at > now,
+        ).values(used_at=now)).rowcount
+        if changed != 1:
+            raise HTTPException(409, "Mã giảm giá đã được sử dụng.")
+
+    placed = []
+    for price in prices:
+        restaurant_id = price["restaurant_id"]
+        rows = groups[restaurant_id]
+        subtotal = price["subtotal"]
         order = Order(
             customer_id=user.id,
             delivery_address=address,
-            grand_total=subtotal + DELIVERY_FEE,
+            grand_total=price["grand_total"],
             status="PENDING",
         )
         db.add(order)
         db.flush()
 
+        db.add(OrderPricing(
+            order_id=order.id, delivery_fee=price["delivery_fee"],
+            distance_km=price["distance_km"], discount=price["discount"],
+            voucher_code=code if price["discount"] else None,
+            platform_fee=platform_fee(subtotal),
+        ))
         sub = SubOrder(
             order_id=order.id,
             restaurant_id=restaurant_id,
@@ -528,8 +598,7 @@ def checkout(
         placed.append({
             "order_id": order.id,
             "sub_order_id": sub.id,
-            "restaurant_id": restaurant_id,
-            "grand_total": order.grand_total,
+            **price,
         })
 
     group_id = placed[0]["order_id"] if len(placed) > 1 else None
@@ -580,7 +649,13 @@ def simulated_driver_location(db, order, user):
 
 
 @app.get("/api/v1/orders")
-def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def list_all_orders(
+    customer_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     query = db.query(Order).order_by(Order.created_at.desc())
     require_role(user, "CUSTOMER", "RESTAURANT", "DRIVER", "ADMIN")
     if user.role == "CUSTOMER":
@@ -600,6 +675,17 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
         query = query.filter(Order.id.in_(assigned))
     elif customer_id:
         query = query.filter(Order.customer_id == customer_id)
+
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(422, "Từ ngày phải nhỏ hơn hoặc bằng Đến ngày")
+
+    vietnam_offset = timedelta(hours=7)
+    if date_from and date_from != date.min:
+        start_utc = datetime.combine(date_from, time.min) - vietnam_offset
+        query = query.filter(Order.created_at >= start_utc)
+    if date_to:
+        end_utc = datetime.combine(date_to, time.max) - vietnam_offset
+        query = query.filter(Order.created_at <= end_utc)
 
     orders = query.all()
     items_by_sub_order = {}
@@ -631,6 +717,10 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
             .all()
         )
 
+    pricing_by_order = {
+        price.order_id: price for price in db.query(OrderPricing)
+        .filter(OrderPricing.order_id.in_([order.id for order in orders])).all()
+    }
     output = []
     for order in orders:
         sub = db.query(SubOrder).filter(SubOrder.order_id == order.id).first()
@@ -647,8 +737,13 @@ def list_all_orders(customer_id: str | None = None, db: Session = Depends(get_db
             assignment = assignment.order_by(DeliveryAssignment.assigned_at.desc()).first()
 
         group = db.get(CheckoutGroupOrder, order.id) if user.role == "CUSTOMER" else None
+        price = pricing_by_order.get(order.id)
         output.append({
             "order_id": order.id,
+            "delivery_fee": price.delivery_fee if price else None,
+            "discount": price.discount if price else 0,
+            "platform_fee": (price.platform_fee if price else None)
+                if user.role in ("RESTAURANT", "ADMIN") else None,
             "checkout_group_id": group.group_id if group else None,
             "restaurant_name": (
                 db.query(Restaurant.name).filter_by(id=sub.restaurant_id).scalar()

@@ -160,3 +160,24 @@ class CheckoutGroupOrder(Base):
 
     order_id = Column(String, ForeignKey("orders.id"), primary_key=True)
     group_id = Column(String, nullable=False, index=True)
+
+
+class Voucher(Base):
+    __tablename__ = "vouchers"
+
+    code = Column(String(32), primary_key=True)
+    amount = Column(Integer, nullable=False)
+    starts_at = Column(DateTime, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+
+class OrderPricing(Base):
+    __tablename__ = "order_pricing"
+
+    order_id = Column(String, ForeignKey("orders.id"), primary_key=True)
+    delivery_fee = Column(Integer, nullable=False)
+    distance_km = Column(Float, nullable=True)
+    voucher_code = Column(String(32), ForeignKey("vouchers.code"), nullable=True)
+    discount = Column(Float, nullable=False)
+    platform_fee = Column(Integer, nullable=False)

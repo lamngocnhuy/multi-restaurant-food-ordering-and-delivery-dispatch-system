@@ -47,8 +47,7 @@ function connectCheckoutReview() {
   const address = getFormElement("addressInput");
   const payment = getFormElement("paymentSelect");
   const cart = getFormElement("cartItems");
-  const total = getFormElement("cartTotal");
-  if (!form || !submit || !address || !payment || !cart || !total) return;
+  if (!form || !submit || !address || !payment || !cart) return;
 
   const dialog = document.createElement("dialog");
   dialog.className = "border rounded-4 shadow p-0";
@@ -81,6 +80,9 @@ function connectCheckoutReview() {
 
   const groupsBox = dialog.querySelector("[data-groups]");
   let confirmed = false;
+  let quoting = false;
+  let reviewedPayload;
+  const currency = new Intl.NumberFormat("vi-VN");
 
   function renderGroup(group) {
     const section = document.createElement("section");
@@ -107,12 +109,12 @@ function connectCheckoutReview() {
     return section;
   }
 
-  form.addEventListener("submit", event => {
+  form.addEventListener("submit", async event => {
     if (confirmed) return;
 
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (submit.disabled || dialog.open) return;
+    if (submit.disabled || dialog.open || quoting) return;
 
     const deliveryAddress = address.value.trim();
     if (deliveryAddress.length < 5) {
@@ -126,13 +128,36 @@ function connectCheckoutReview() {
     );
     if (!selectedGroups.length) return;
 
-    groupsBox.replaceChildren(...selectedGroups.map(renderGroup));
+    quoting = true;
+    const payload = checkoutPayload();
+    let quote;
+    try {
+      quote = await postJson("/api/v1/orders/quote", payload);
+    } catch (error) {
+      showCheckoutNotice(error.message, "danger");
+      return;
+    } finally {
+      quoting = false;
+    }
+    if (JSON.stringify(payload) !== JSON.stringify(checkoutPayload())) {
+      showCheckoutNotice("Thông tin đã thay đổi. Vui lòng xem lại đơn.", "warning");
+      return;
+    }
+    reviewedPayload = JSON.stringify(payload);
+    form.dataset.quotedTotal = String(quote.grand_total);
+    const sections = selectedGroups.map(renderGroup);
+    quote.orders.forEach((order, index) => {
+      const distance = order.distance_km == null ? "" : ` (${order.distance_km} km)`;
+      sections[index].querySelector("p").textContent =
+        `Tiền món ${currency.format(order.subtotal)} VNĐ · Phí giao ${currency.format(order.delivery_fee)} VNĐ${distance} · Giảm ${currency.format(order.discount)} VNĐ`;
+    });
+    groupsBox.replaceChildren(...sections);
     dialog.querySelector("[data-count]").textContent =
       `Bạn đang đặt ${selectedGroups.length} đơn từ ${selectedGroups.length} quán.`;
     dialog.querySelector("[data-address]").textContent = deliveryAddress;
     dialog.querySelector("[data-payment]").textContent =
       payment.selectedOptions[0]?.textContent ?? "";
-    dialog.querySelector("[data-total]").textContent = total.textContent;
+    dialog.querySelector("[data-total]").textContent = `${currency.format(quote.grand_total)} VNĐ`;
     dialog.showModal();
   }, true);
 
@@ -141,6 +166,10 @@ function connectCheckoutReview() {
   dialog.querySelector("[data-confirm]").addEventListener("click", () => {
     dialog.close();
     if (submit.disabled) return;
+    if (reviewedPayload !== JSON.stringify(checkoutPayload())) {
+      showCheckoutNotice("Thông tin đã thay đổi. Vui lòng xem lại đơn.", "warning");
+      return;
+    }
 
     confirmed = true;
     try {
